@@ -1,4 +1,4 @@
-FROM python:3.9-slim as builder
+FROM python:3.11-slim as builder
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
