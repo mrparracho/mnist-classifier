@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../app
+      dockerfile: Dockerfile
+    container_name: mnist-app
+    ports:
+      - "8501:8501"
+    environment:
+      - MODEL_API_URL=http://model-service:8000
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=mnist
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DEBUG=True
+    volumes:
+      - ../app:/app
+    depends_on:
+      - model-service
+      - db
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+  model-service:
+    build:
+      context: ../model
+      dockerfile: Dockerfile
+    container_name: mnist-model-service
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=mnist
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - MODEL_PATH=/app/checkpoints/mnist_model.pt
+      - DEBUG=True
+      - RELOAD=True
+    volumes:
+      - ../model:/app
+      - model-checkpoints:/app/checkpoints
+    depends_on:
+      - db
+    command: >
+      sh -c "sleep 10 && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  db:
+    build:
+      context: ../db
+      dockerfile: Dockerfile
+    container_name: mnist-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=mnist
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: mnist-pgadmin
+    ports:
+      - "5050:5050"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_LISTEN_PORT=5050
+    depends_on:
+      - db
+
+volumes:
+  postgres-data:
+  model-checkpoints:

@@ -1,0 +1,77 @@
+
+mnist-classifier/
+│
+├── .github/                        # GitHub Actions workflows
+│   └── workflows/
+│       ├── ci.yml                  # CI pipeline
+│       └── deploy.yml              # Deployment automation
+│
+├── app/                            # Streamlit web application
+│   ├── Dockerfile                  # Dockerfile for web app
+│   ├── requirements.txt            # Web app dependencies
+│   ├── pages/                      # Streamlit multi-page components
+│   │   ├── home.py                 # Home page with digit drawing canvas
+│   │   └── stats.py                # Statistics and insights page
+│   ├── components/                 # Reusable UI components
+│   │   ├── drawing_canvas.py       # Canvas for digit drawing
+│   │   └── prediction_display.py   # Component to show predictions
+│   ├── utils/                      # Utility functions
+│   │   ├── api.py                  # API client to communicate with model service
+│   │   └── preprocessing.py        # Image preprocessing for API calls
+│   └── app.py                      # Main Streamlit application
+│
+├── model/                          # Model training and serving
+│   ├── Dockerfile                  # Dockerfile for model service
+│   ├── requirements.txt            # Model dependencies
+│   ├── api/                        # FastAPI service for model inference
+│   │   ├── main.py                 # FastAPI application
+│   │   ├── models.py               # Pydantic models for API
+│   │   └── routers/                # API endpoints
+│   │       └── predictions.py      # Prediction endpoints
+│   ├── training/                   # Model training code
+│   │   ├── data_loader.py          # MNIST data loading and preprocessing
+│   │   ├── model.py                # PyTorch model architecture
+│   │   ├── train.py                # Training script
+│   │   └── evaluate.py             # Evaluation script
+│   ├── scripts/                    # Utility scripts
+│   │   ├── download_data.py        # Script to download MNIST data
+│   │   └── export_model.py         # Script to export trained model
+│   └── checkpoints/                # Directory for model checkpoints (gitignored)
+│
+├── db/                             # Database setup and migrations
+│   ├── Dockerfile                  # Dockerfile for PostgreSQL
+│   ├── init.sql                    # Database initialization script
+│   ├── migrations/                 # SQL migration scripts
+│   │   ├── 001_create_tables.sql   # Initial schema
+│   │   └── 002_indices.sql         # Add indices
+│   └── scripts/                    # Database utility scripts
+│       └── backup.sh               # Backup script
+│
+├── infrastructure/                 # Infrastructure as code
+│   ├── docker-compose.yml          # Docker Compose configuration
+│   ├── docker-compose.dev.yml      # Development Docker Compose
+│   └── nginx/                      # Nginx configuration
+│       ├── Dockerfile              # Dockerfile for Nginx
+│       └── nginx.conf              # Nginx configuration file
+│
+├── scripts/                        # Project utility scripts
+│   ├── setup.sh                    # Development environment setup
+│   ├── train_model.sh              # Model training wrapper script
+│   └── deploy.sh                   # Deployment script
+│
+├── tests/                          # Tests
+│   ├── unit/                       # Unit tests
+│   │   ├── test_model.py           # Model tests
+│   │   └── test_preprocessing.py   # Preprocessing tests
+│   ├── integration/                # Integration tests
+│   │   └── test_api.py             # API tests
+│   └── e2e/                        # End-to-end tests
+│       └── test_prediction_flow.py # Complete prediction flow test
+│
+├── .gitignore                      # Gitignore file
+├── .dockerignore                   # Dockerignore file
+├── .env.example                    # Example environment variables
+├── requirements-dev.txt            # Development dependencies
+├── pyproject.toml                  # Python project configuration
+├── Makefile                        # Makefile for common commands
+└── README.md                       # Project documentation

@@ -1,0 +1,3 @@
+"""
+MNIST model training package
+""" 
