@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 @dataclass
@@ -31,8 +31,8 @@ class AppConfig:
     style_path: str = "styles/main.css"
     
     # Component configurations
-    api: APIConfig = APIConfig()
-    canvas: CanvasConfig = CanvasConfig()
+    api: APIConfig = field(default_factory=APIConfig)
+    canvas: CanvasConfig = field(default_factory=CanvasConfig)
 
 # Create global config instance
 config = AppConfig() 

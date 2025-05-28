@@ -26,7 +26,6 @@ COPY . /app/
 
 # Install the model package in development mode
 WORKDIR /app
-RUN pip install -e .
 
 # Add the app directory to PYTHONPATH
 ENV PYTHONPATH=/app
