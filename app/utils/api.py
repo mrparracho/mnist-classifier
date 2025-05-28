@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import requests
 from requests.exceptions import RequestException
 
@@ -81,6 +81,17 @@ class MNISTApiClient:
         """
         return self._make_request('GET', 'stats')
 
-    def get_prediction_history(self, limit: int = 10):
-        """Fetch prediction history from the backend API."""
-        return self._make_request('GET', f'history?limit={limit}') 
+    def get_prediction_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Fetch prediction history from the backend API.
+        
+        Args:
+            limit: Maximum number of history entries to fetch.
+            
+        Returns:
+            List of prediction history entries. Returns empty list if no history or error.
+        """
+        try:
+            return self._make_request('GET', f'history?limit={limit}')
+        except APIError:
+            # Return empty list if history endpoint fails
+            return [] 

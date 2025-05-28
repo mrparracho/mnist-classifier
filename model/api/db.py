@@ -52,7 +52,7 @@ class Database:
                 cur.execute(
                     """
                     INSERT INTO predictions 
-                    (image_data, prediction, confidence, created_at)
+                    (image_data, prediction, confidence, timestamp)
                     VALUES (%s, %s, %s, %s)
                     RETURNING id
                     """,

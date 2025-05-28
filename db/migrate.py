@@ -19,8 +19,7 @@ class DatabaseMigrator:
             'user': os.getenv('POSTGRES_USER', 'postgres'),
             'password': os.getenv('POSTGRES_PASSWORD', 'postgres'),
             'database': os.getenv('POSTGRES_DB', 'mnist'),
-            'host': 'localhost',
-            'port': '5432'
+            'host': '/var/run/postgresql'  # Use Unix socket
         }
         self.conn = None
 

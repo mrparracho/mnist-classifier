@@ -79,6 +79,11 @@ with col1:
             AppState.reset_prediction()
             # Increment canvas key to force a reset
             st.session_state.canvas_key += 1
+            # Refresh prediction history
+            try:
+                st.session_state["history_data"] = api_client.get_prediction_history(limit=10)
+            except Exception as e:
+                st.warning("Could not refresh prediction history.")
             st.rerun()
 
 # Prediction display in the second column
@@ -247,28 +252,19 @@ with st.sidebar:
 # --- Prediction History Table ---
 # Fetch history only if needed
 if "history_data" not in st.session_state:
-    st.session_state["history_data"] = api_client.get_prediction_history(limit=10)
+    try:
+        st.session_state["history_data"] = api_client.get_prediction_history(limit=10)
+    except Exception as e:
+        st.session_state["history_data"] = []
+        st.warning("Could not load prediction history. This is normal for first-time use.")
 
-if st.session_state.get("refresh_history", False):
-    st.session_state["history_data"] = api_client.get_prediction_history(limit=10)
-    st.session_state["refresh_history"] = False
-
-# Always display the table using the cached data
-prediction_history = st.session_state["history_data"]
-
-st.markdown("### Prediction History")
-if prediction_history:
-    df = pd.DataFrame(prediction_history)
-    df = df.rename(columns={
-        "timestamp": "Timestamp",
-        "prediction": "Pred",
-        "true_label": "True",
-        "confidence": "Conf"
-    })
-    df["Conf"] = (df["Conf"] * 100).map("{:.1f}%".format)
-    st.dataframe(df, use_container_width=True)
+# Display history if available
+if st.session_state["history_data"]:
+    st.markdown("### Recent Predictions")
+    history_df = pd.DataFrame(st.session_state["history_data"])
+    st.dataframe(history_df)
 else:
-    st.info("No prediction history found.")
+    st.info("No prediction history available yet. Make your first prediction to see it here!")
 
 # Add footer
 st.markdown("""
