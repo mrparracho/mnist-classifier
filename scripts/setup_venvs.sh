@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Use Python 3.11 from Homebrew
-PYTHON_CMD="/opt/homebrew/bin/python3.11"
+# Check for Python 3.11
+PYTHON_CMD="python3.11"
 
-if [ ! -f "$PYTHON_CMD" ]; then
-    echo "Python 3.11 is required but not found at $PYTHON_CMD"
-    echo "Please ensure Python 3.11 is installed and in your PATH."
-    echo "You can install it using: brew install python@3.11"
+# Check if Python 3.11 is available
+if ! command -v $PYTHON_CMD &> /dev/null; then
+    echo "Python 3.11 is required but not found in PATH"
+    echo "Please install Python 3.11 and ensure it's available in your PATH"
     exit 1
 fi
 
