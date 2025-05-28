@@ -10,11 +10,14 @@ if ! command -v $PYTHON_CMD &> /dev/null; then
     exit 1
 fi
 
-echo "Using Python command: $PYTHON_CMD"
+# Create alias for python3.11 as python
+alias python=$PYTHON_CMD
+
+echo "Using Python command: $PYTHON_CMD (aliased as 'python')"
 
 # Create virtual environments for each service using Python 3.11
-$PYTHON_CMD -m venv .venv/model
-$PYTHON_CMD -m venv .venv/app
+python -m venv .venv/model
+python -m venv .venv/app
 
 # Install model dependencies
 source .venv/model/bin/activate
