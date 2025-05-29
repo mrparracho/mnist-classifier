@@ -10,7 +10,7 @@
 
 A web application for recognizing handwritten digits using a PyTorch neural network trained on the MNIST dataset.
 
-**[Live Demo](https://mnist.example.com)**
+**[Live Demo](https://195.201.26.250)**
 
 - Interactive digit drawing interface
 - Real-time digit recognition
