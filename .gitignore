@@ -43,6 +43,9 @@ model/data/
 .env
 .docker
 
+data/
+checkpoints/
+
 # Database
 *.sqlite3
 *.db
