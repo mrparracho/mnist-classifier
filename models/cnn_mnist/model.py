@@ -1,9 +1,17 @@
+"""
+CNN MNIST model implementation.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as transforms
+from typing import Optional
+
+from base.base_model import BaseModel
 
 
-class MNISTModel(nn.Module):
+class CNNMNISTModel(nn.Module):
     """
     Convolutional Neural Network for MNIST digit classification.
     
@@ -14,7 +22,7 @@ class MNISTModel(nn.Module):
     """
     
     def __init__(self):
-        super(MNISTModel, self).__init__()
+        super(CNNMNISTModel, self).__init__()
         # First convolutional layer
         # Input: 1x28x28, Output: 32 feature maps
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
@@ -55,34 +63,40 @@ class MNISTModel(nn.Module):
         x = self.fc2(x)
         
         return x
+
+
+class CNNMNISTClassifier(BaseModel):
+    """
+    CNN MNIST classifier wrapper that implements the BaseModel interface.
+    """
     
-    def predict(self, x):
+    def __init__(self, checkpoint_path: Optional[str] = None):
         """
-        Make a prediction with probabilities
+        Initialize the CNN MNIST classifier.
         
         Args:
-            x: Input tensor of shape [batch_size, 1, 28, 28]
-            
-        Returns:
-            tuple: (predicted_class, confidence)
+            checkpoint_path: Path to the model checkpoint file
         """
-        with torch.no_grad():
-            # Forward pass
-            logits = self(x)
-            
-            # Apply softmax to get probabilities
-            probabilities = F.softmax(logits, dim=1)
-            
-            # Get predicted class (digit with highest probability)
-            predicted_class = torch.argmax(probabilities, dim=1)
-            
-            # Get the confidence (probability of the predicted class)
-            confidence = torch.max(probabilities, dim=1)[0]
-            
-            return predicted_class, confidence
-
-
-def get_model():
-    """Factory function to create and initialize the model."""
-    model = MNISTModel()
-    return model
+        super().__init__("cnn_mnist", checkpoint_path)
+    
+    def create_model(self) -> nn.Module:
+        """
+        Create and return the CNN model architecture.
+        
+        Returns:
+            nn.Module: The CNN model architecture
+        """
+        return CNNMNISTModel()
+    
+    def get_preprocessing_transform(self) -> transforms.Compose:
+        """
+        Get the preprocessing transform for CNN model.
+        
+        Returns:
+            transforms.Compose: The preprocessing pipeline
+        """
+        return transforms.Compose([
+            transforms.Resize((28, 28)),
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ]) 

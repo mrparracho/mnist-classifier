@@ -1,7 +1,7 @@
 import pytest
 import torch
 import numpy as np
-from model.training.model import MNISTModel
+from models import get_model
 
 @pytest.fixture
 def model():

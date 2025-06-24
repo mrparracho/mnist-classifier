@@ -44,7 +44,7 @@ class Database:
         
         raise psycopg2.OperationalError("Could not connect to database")
 
-    def store_prediction(self, image_data: bytes, prediction: int, confidence: float) -> uuid.UUID:
+    def store_prediction(self, image_data: bytes, prediction: int, confidence: float, model_name: str = "cnn_mnist", session_id: Optional[str] = None) -> uuid.UUID:
         """Store a new prediction."""
         conn = self.get_connection()
         try:
@@ -52,11 +52,11 @@ class Database:
                 cur.execute(
                     """
                     INSERT INTO predictions 
-                    (image_data, prediction, confidence, timestamp)
-                    VALUES (%s, %s, %s, %s)
+                    (image_data, prediction, confidence, timestamp, model_name, session_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
-                    (image_data, prediction, confidence, datetime.utcnow())
+                    (image_data, prediction, confidence, datetime.utcnow(), model_name, session_id)
                 )
                 prediction_id = cur.fetchone()[0]
                 conn.commit()
@@ -66,8 +66,8 @@ class Database:
             logger.error(f"Error storing prediction: {e}")
             raise
 
-    def update_prediction_feedback(self, prediction_id: uuid.UUID, actual_digit: int) -> Tuple[int, bool]:
-        """Update prediction with feedback."""
+    def update_prediction_feedback(self, prediction_id: uuid.UUID, actual_digit: int) -> Tuple[int, bool, Optional[str]]:
+        """Update prediction with feedback and return session_id if available."""
         conn = self.get_connection()
         try:
             with conn.cursor() as cur:
@@ -79,7 +79,7 @@ class Database:
                         feedback_submitted = true,
                         updated_at = %s
                     WHERE id = %s
-                    RETURNING prediction, is_correct
+                    RETURNING prediction, is_correct, session_id
                     """,
                     (actual_digit, actual_digit, datetime.utcnow(), str(prediction_id))
                 )
@@ -87,7 +87,7 @@ class Database:
                 if not result:
                     raise ValueError(f"Prediction {prediction_id} not found")
                 
-                prediction, is_correct = result
+                prediction, is_correct, session_id = result
                 
                 # Record feedback history
                 cur.execute(
@@ -98,10 +98,47 @@ class Database:
                     (str(prediction_id), actual_digit)
                 )
                 conn.commit()
-                return prediction, is_correct
+                return prediction, is_correct, session_id
         except Exception as e:
             conn.rollback()
             logger.error(f"Error updating prediction feedback: {e}")
+            raise
+
+    def update_session_feedback(self, session_id: str, actual_digit: int, original_prediction_id: uuid.UUID) -> int:
+        """Update all predictions in the same session with the true label."""
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Update all predictions in the session except the one already updated
+                cur.execute(
+                    """
+                    UPDATE predictions
+                    SET true_label = %s,
+                        is_correct = (prediction = %s),
+                        feedback_submitted = true,
+                        updated_at = %s
+                    WHERE session_id = %s AND id != %s
+                    """,
+                    (actual_digit, actual_digit, datetime.utcnow(), session_id, str(original_prediction_id))
+                )
+                updated_count = cur.rowcount + 1  # +1 for the original prediction
+                
+                # Record feedback history for all updated predictions
+                cur.execute(
+                    """
+                    INSERT INTO feedback_history (prediction_id, true_label)
+                    SELECT id, %s 
+                    FROM predictions 
+                    WHERE session_id = %s AND id != %s AND true_label = %s
+                    """,
+                    (actual_digit, session_id, str(original_prediction_id), actual_digit)
+                )
+                
+                conn.commit()
+                return updated_count
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error updating session feedback: {e}")
             raise
 
     def get_model_stats(self) -> Dict[str, Any]:
@@ -164,23 +201,20 @@ class Database:
             raise
 
     def get_prediction_history(self, limit: int = 10):
-        """Return recent predictions with timestamp, prediction, true_label, and confidence."""
+        """Get recent prediction history."""
         conn = self.get_connection()
         try:
             with conn.cursor(cursor_factory=DictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT timestamp, prediction, true_label, confidence
+                cur.execute("""
+                    SELECT timestamp, prediction, true_label, confidence, model_name
                     FROM predictions
                     ORDER BY timestamp DESC
                     LIMIT %s
-                    """,
-                    (limit,)
-                )
+                """, (limit,))
                 return cur.fetchall()
         except Exception as e:
-            logger.error(f"Error fetching prediction history: {e}")
+            logger.error(f"Error getting prediction history: {e}")
             raise
 
-# Create a global database instance
+# Global database instance
 db = Database() 

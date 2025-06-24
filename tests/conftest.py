@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 import torch
-from model.training.model import MNISTModel
+from models import get_model
 from datetime import datetime
 from unittest.mock import patch
 
@@ -24,7 +24,7 @@ def mock_model():
 def app(mock_model):
     """Create a FastAPI app with mocked model loading."""
     with patch('model.api.main.load_model', return_value=mock_model):
-        from model.api.main import app
+        from models.api.main import app
         return app
 
 @pytest.fixture(scope="session")
@@ -52,7 +52,7 @@ def test_db(test_db_engine):
 @pytest.fixture(scope="function")
 def client(app, test_db):
     """Create a test client with a test database."""
-    from model.api.database import get_db
+    from models.api.database import init_db
     
     def override_get_db():
         try:
@@ -97,7 +97,7 @@ def test_prediction_record(test_db):
 @pytest.fixture(scope="function")
 def test_feedback_record(test_db, test_prediction_record):
     """Create a test feedback record in the database."""
-    from model.api.models import Feedback
+    from models.api.models import FeedbackRequest
     feedback = Feedback(
         prediction_id=test_prediction_record.id,
         is_correct=True,

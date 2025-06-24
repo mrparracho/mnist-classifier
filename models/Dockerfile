@@ -21,10 +21,10 @@ RUN mkdir -p /app/checkpoints
 COPY wait-for-it.sh /wait-for-it.sh
 RUN chmod +x /wait-for-it.sh
 
-# Copy the model package
+# Copy the models package
 COPY . /app/
 
-# Install the model package in development mode
+# Install the models package in development mode
 WORKDIR /app
 
 # Add the app directory to PYTHONPATH
@@ -34,4 +34,4 @@ ENV PYTHONPATH=/app
 EXPOSE 8000
 
 # Command to run the application with wait-for-it
-CMD ["/wait-for-it.sh", "db:5432", "--", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["/wait-for-it.sh", "db:5432", "--", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"] 

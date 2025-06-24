@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+"""
+Training script for CNN MNIST model.
+"""
+
 import os
 import argparse
 import logging
@@ -10,10 +15,11 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 
-from model import get_model
+# Add the parent directory to the Python path
+import sys
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-# Get the model directory path
-MODEL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from models.cnn_mnist.model import CNNMNISTModel
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +40,7 @@ def get_data_loaders(batch_size=64, data_dir=None):
         tuple: (train_loader, test_loader)
     """
     if data_dir is None:
-        data_dir = os.path.join(MODEL_DIR, "data")
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
     
     # Define transformations
     transform = transforms.Compose([
@@ -82,7 +88,7 @@ def get_data_loaders(batch_size=64, data_dir=None):
 def train_model(model, train_loader, test_loader, device, epochs=10, learning_rate=0.001, 
                 checkpoint_dir="./checkpoints"):
     """
-    Train the MNIST model.
+    Train the CNN MNIST model.
     
     Args:
         model (nn.Module): The neural network model
@@ -167,7 +173,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         # Save model if it's the best so far
         if accuracy > best_accuracy:
             best_accuracy = accuracy
-            checkpoint_path = os.path.join(checkpoint_dir, "mnist_model.pt")
+            checkpoint_path = os.path.join(checkpoint_dir, "cnn_mnist.pt")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -177,7 +183,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
             logger.info(f"New best model saved with accuracy: {accuracy:.2f}%")
         
         # Save checkpoint for every epoch
-        checkpoint_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch+1}.pt")
+        checkpoint_path = os.path.join(checkpoint_dir, f"cnn_mnist_epoch_{epoch+1}.pt")
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -190,8 +196,8 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
 
 
 def main():
-    """Main function to train the MNIST model."""
-    parser = argparse.ArgumentParser(description="Train MNIST Model")
+    """Main function to train the CNN MNIST model."""
+    parser = argparse.ArgumentParser(description="Train CNN MNIST Model")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
     parser.add_argument("--epochs", type=int, default=10, help="Number of epochs to train")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
@@ -202,9 +208,9 @@ def main():
     
     # Set default paths if not provided
     if args.data_dir is None:
-        args.data_dir = os.path.join(MODEL_DIR, "data")
+        args.data_dir = os.path.join(os.path.dirname(__file__), "data")
     if args.checkpoint_dir is None:
-        args.checkpoint_dir = os.path.join(MODEL_DIR, "checkpoints")
+        args.checkpoint_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
     
     # Check for CUDA availability
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -217,9 +223,12 @@ def main():
         data_dir=args.data_dir
     )
     
-    # Create model and move to device
-    model = get_model()
+    # Create the raw PyTorch model (not the wrapper)
+    model = CNNMNISTModel()
     model = model.to(device)
+    
+    logger.info(f"Training CNN MNIST model for {args.epochs} epochs")
+    logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Train model
     train_model(
@@ -233,10 +242,10 @@ def main():
     )
     
     # Export model for inference
-    export_path = os.path.join(args.checkpoint_dir, "mnist_model.pt")
+    export_path = os.path.join(args.checkpoint_dir, "cnn_mnist.pt")
     torch.save(model.state_dict(), export_path)
     logger.info(f"Model exported for inference to {export_path}")
 
 
 if __name__ == "__main__":
-    main()
+    main() 
