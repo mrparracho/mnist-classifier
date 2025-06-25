@@ -19,7 +19,7 @@ from tqdm import tqdm
 import sys
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from models.transformer1_mnist.model import Transformer1Model
+from models.transformer1_mnist.model import Transformer1MNISTClassifier
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +27,26 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+def get_device():
+    """
+    Get the best available device for training.
+    Priority: MPS (Apple Silicon) > CUDA > CPU
+    
+    Returns:
+        torch.device: The best available device
+    """
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        logger.info("Using MPS (Apple Silicon GPU) for training")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info("Using CUDA GPU for training")
+    else:
+        device = torch.device("cpu")
+        logger.info("Using CPU for training")
+    
+    return device
 
 def get_data_loaders(batch_size=64, data_dir=None):
     """
@@ -94,7 +114,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         model (nn.Module): The neural network model
         train_loader (DataLoader): DataLoader for training data
         test_loader (DataLoader): DataLoader for test data
-        device (torch.device): Device to train on (CPU or GPU)
+        device (torch.device): Device to train on (CPU, CUDA, or MPS)
         epochs (int): Number of training epochs
         learning_rate (float): Learning rate for the optimizer
         checkpoint_dir (str): Directory to save model checkpoints
@@ -204,6 +224,7 @@ def main():
     parser.add_argument("--data-dir", type=str, help="Directory to store dataset")
     parser.add_argument("--checkpoint-dir", type=str, help="Directory to save checkpoints")
     parser.add_argument("--no-cuda", action="store_true", default=False, help="Disable CUDA training")
+    parser.add_argument("--no-mps", action="store_true", default=False, help="Disable MPS training")
     args = parser.parse_args()
     
     # Set default paths if not provided
@@ -212,10 +233,19 @@ def main():
     if args.checkpoint_dir is None:
         args.checkpoint_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
     
-    # Check for CUDA availability
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
+    # Get the best available device
+    if args.no_mps or not torch.backends.mps.is_available():
+        # Fall back to CUDA/CPU logic
+        use_cuda = not args.no_cuda and torch.cuda.is_available()
+        device = torch.device("cuda" if use_cuda else "cpu")
+    else:
+        device = get_device()
+    
     logger.info(f"Using device: {device}")
+    
+    # Set number of CPU threads for CPU training
+    if device.type == "cpu":
+        torch.set_num_threads(4)  # Use multiple CPU cores
     
     # Get data loaders
     train_loader, test_loader = get_data_loaders(
@@ -224,13 +254,7 @@ def main():
     )
     
     # Create the raw PyTorch model (not the wrapper)
-    model = Transformer1Model(
-        image_size=28,
-        patch_size=7,
-        embed_dim=128,
-        num_layers=3,
-        num_classes=10
-    )
+    model = Transformer1MNISTClassifier().create_model()
     model = model.to(device)
     
     logger.info(f"Training Transformer1 MNIST model for {args.epochs} epochs")

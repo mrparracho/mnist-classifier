@@ -208,10 +208,10 @@ class Transformer2MNISTClassifier(BaseModel):
             image_size=28,
             patch_size=7,
             embed_dim=64,
-            num_layers=4, # 4 encoder layers
+            num_layers=8, # 3 encoder layers
             num_classes=10,
-            num_heads=8,  # 8 attention heads
-            dropout=0.1
+            num_heads=4,  # 8 attention heads
+            dropout=0
         )
     
     def get_preprocessing_transform(self) -> transforms.Compose:
