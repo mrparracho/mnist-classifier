@@ -1,0 +1,38 @@
+{
+  "model_config": {
+    "embed_dim": 128.0,
+    "num_heads": 16.0,
+    "num_layers": 16.0,
+    "batch_size": 2.0,
+    "num_samples": 200.0,
+    "device": "mps"
+  },
+  "memory": {
+    "model_memory_mb": 25.685108184814453,
+    "peak_memory_mb": 0.03305625915527344,
+    "current_memory_mb": 0.028272628784179688
+  },
+  "compression": {
+    "seq_len_10": "{'standard_memory': 40960, 'mla_memory': 6720, 'compression_ratio': 6.095238095238095, 'memory_saved_percent': 83.59375}",
+    "seq_len_20": "{'standard_memory': 81920, 'mla_memory': 13440, 'compression_ratio': 6.095238095238095, 'memory_saved_percent': 83.59375}",
+    "seq_len_50": "{'standard_memory': 204800, 'mla_memory': 33600, 'compression_ratio': 6.095238095238095, 'memory_saved_percent': 83.59375}",
+    "seq_len_100": "{'standard_memory': 409600, 'mla_memory': 67200, 'compression_ratio': 6.095238095238095, 'memory_saved_percent': 83.59375}"
+  },
+  "speed": {
+    "length_10": "{'total_time': 56.65636897087097, 'samples_per_sec': 3.5300532602579424, 'tokens_per_sec': 38.83058586283737, 'total_tokens': 2200, 'total_samples': 200}",
+    "length_20": "{'total_time': 119.25021290779114, 'samples_per_sec': 1.677145852600261, 'tokens_per_sec': 35.22006290460548, 'total_tokens': 4200, 'total_samples': 200}",
+    "length_30": "{'total_time': 184.15763807296753, 'samples_per_sec': 1.0860260920633407, 'tokens_per_sec': 33.66680885396356, 'total_tokens': 6200, 'total_samples': 200}",
+    "length_50": "{'total_time': 330.522625207901, 'samples_per_sec': 0.605102297835734, 'tokens_per_sec': 30.860217189622436, 'total_tokens': 10200, 'total_samples': 200}"
+  },
+  "accuracy": {
+    "average_loss": 2.844636917114258,
+    "valid_outputs": 50.0,
+    "total_tests": 100.0
+  },
+  "parameters": {
+    "total_parameters": 6733133.0,
+    "attention_parameters": 7407552.0,
+    "attention_percentage": 110.0164217757172,
+    "non_attention_parameters": -674419.0
+  }
+}

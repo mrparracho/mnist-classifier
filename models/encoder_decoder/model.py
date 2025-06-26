@@ -1,18 +1,13 @@
 """
-Encoder-Decoder MNIST model implementation with Multi-Head Latent Attention (MLA) and RoPE.
+Encoder-Decoder MNIST model implementation.
 """
 
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-import math
 from typing import Optional
 
 from base.base_model import BaseModel
-from .mla_attention import MLAEncoderSelfAttention, MLADecoderSelfAttention, MLADecoderCrossAttention
-
-
-# Old RoPE implementation removed - MLA handles its own positional encoding
 
 
 class PatchEmbedding(nn.Module):
@@ -24,7 +19,7 @@ class PatchEmbedding(nn.Module):
         
         # Define layers and parameters
         self.patch_embedding = nn.Linear(patch_size * patch_size, encoder_embed_dim)
-        # Remove position embedding - RoPE will handle positions
+        self.position_embedding = nn.Parameter(torch.randn(self.num_patches, encoder_embed_dim))
         self.class_token = nn.Parameter(torch.randn(1, 1, encoder_embed_dim))
     
     def forward(self, x):
@@ -35,8 +30,11 @@ class PatchEmbedding(nn.Module):
         # Linear projection
         embedded_patches = self.patch_embedding(patches_flat)
         
-        # Add class token (no position embeddings needed with RoPE)
-        embedded_patches_with_class = torch.cat([self.class_token.expand(x.shape[0], -1, -1), embedded_patches], dim=1)
+        # Add positional embeddings
+        embedded_patches_with_pos = embedded_patches + self.position_embedding
+        
+        # Add class token
+        embedded_patches_with_class = torch.cat([self.class_token.expand(x.shape[0], -1, -1), embedded_patches_with_pos], dim=1)
         
         return embedded_patches_with_class
 
@@ -46,7 +44,7 @@ class DecoderEmbedding(nn.Module):
         # Vocabulary: 0-9 (digits) + <start> + <finish> + <pad> = 13 tokens
         self.vocab_size = 13
         self.token_embedding = nn.Embedding(self.vocab_size, decoder_embed_dim)
-        # Remove position embedding - RoPE will handle positions
+        self.position_embedding = nn.Parameter(torch.randn(max_seq_len, decoder_embed_dim))
         self.decoder_embed_dim = decoder_embed_dim
         
         # Define token indices
@@ -56,8 +54,10 @@ class DecoderEmbedding(nn.Module):
         
     def forward(self, x):
         # x is a tensor of integers [batch_size, seq_len]
-        # Only token embeddings - no position embeddings with RoPE
-        return self.token_embedding(x)
+        seq_len = x.size(1)
+        token_embeddings = self.token_embedding(x)
+        position_embeddings = self.position_embedding[:seq_len, :]
+        return token_embeddings + position_embeddings
     
     def get_start_token(self, batch_size, device):
         """Get start token for a batch"""
@@ -79,67 +79,150 @@ class OutputProjection(nn.Module):
 
 
 class EncoderSelfAttention(nn.Module):
-    """Wrapper for MLA Encoder Self-Attention to maintain interface compatibility"""
     def __init__(self, encoder_embed_dim, num_heads=1, dropout=0.1):
         super(EncoderSelfAttention, self).__init__()
+        self.encoder_embed_dim = encoder_embed_dim
+        self.num_heads = num_heads
+        self.head_dim = encoder_embed_dim // num_heads
         
-        # Calculate appropriate compression ratios based on model size
-        kv_lora_rank = max(encoder_embed_dim // 2, 64)  # 2x compression for encoder
-        qk_rope_head_dim = min(32, encoder_embed_dim // num_heads // 2)  # Adaptive RoPE dim
+        # Ensure encoder_embed_dim is divisible by num_heads
+        assert encoder_embed_dim % num_heads == 0, "encoder_embed_dim must be divisible by num_heads"
         
-        # Use MLA implementation
-        self.mla_attention = MLAEncoderSelfAttention(
-            embed_dim=encoder_embed_dim,
-            num_heads=num_heads,
-            kv_lora_rank=kv_lora_rank,
-            qk_rope_head_dim=qk_rope_head_dim,
-            dropout=dropout
-        )
+        # Define the linear layers
+        self.W_q = nn.Linear(encoder_embed_dim, encoder_embed_dim) 
+        self.W_k = nn.Linear(encoder_embed_dim, encoder_embed_dim)
+        self.W_v = nn.Linear(encoder_embed_dim, encoder_embed_dim)
+        self.W_o = nn.Linear(encoder_embed_dim, encoder_embed_dim)
+        
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.mla_attention(x)
+        batch_size, seq_len, encoder_embed_dim = x.shape
+
+        # Compute Q, K, V
+        K = x @ self.W_k.weight.T
+        Q = x @ self.W_q.weight.T
+        V = x @ self.W_v.weight.T
+        
+        # Reshape for multi-head attention
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Compute attention scores
+        A = Q @ K.transpose(-1, -2)
+        A = A / (self.head_dim ** 0.5)  # scale by sqrt(d_k)
+        A = torch.softmax(A, dim=-1)
+        A = self.dropout(A)
+        
+        # Apply attention
+        H = A @ V
+        
+        # Reshape back
+        H = H.transpose(1, 2).contiguous().view(batch_size, seq_len, encoder_embed_dim)
+        H = self.W_o(H)
+        
+        return H
 
 class DecoderAttention(nn.Module):
-    """Wrapper for MLA Decoder Cross-Attention to maintain interface compatibility"""
     def __init__(self, encoder_output_embed_dim, decoder_embed_dim, num_heads=1, dropout=0.1):
         super(DecoderAttention, self).__init__()
+        self.encoder_output_embed_dim = encoder_output_embed_dim
+        self.decoder_embed_dim = decoder_embed_dim
+        self.num_heads = num_heads
+        self.head_dim = decoder_embed_dim // num_heads
         
-        # Aggressive compression for cross-attention (encoder is static)
-        kv_lora_rank = max(encoder_output_embed_dim // 4, 32)  # 4x compression
+        # Ensure decoder_embed_dim is divisible by num_heads
+        assert decoder_embed_dim % num_heads == 0, "decoder_embed_dim must be divisible by num_heads"
         
-        # Use MLA implementation
-        self.mla_attention = MLADecoderCrossAttention(
-            encoder_embed_dim=encoder_output_embed_dim,
-            decoder_embed_dim=decoder_embed_dim,
-            num_heads=num_heads,
-            kv_lora_rank=kv_lora_rank,
-            dropout=dropout
-        )
+        # Define the linear layers
+        self.W_q = nn.Linear(decoder_embed_dim, decoder_embed_dim) 
+        self.W_k = nn.Linear(encoder_output_embed_dim, decoder_embed_dim)  # Project to decoder dim
+        self.W_v = nn.Linear(encoder_output_embed_dim, decoder_embed_dim)  # Project to decoder dim
+        self.W_o = nn.Linear(decoder_embed_dim, decoder_embed_dim)  # Output to decoder dim
+        
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, encoder_output):
-        return self.mla_attention(x, encoder_output)
+        batch_size, seq_len, decoder_embed_dim = x.shape
+        encoder_seq_len = encoder_output.shape[1]
+
+        # Compute Q, K, V
+        Q = self.W_q(x)
+        K = self.W_k(encoder_output)
+        V = self.W_v(encoder_output)
+        
+        # Reshape for multi-head attention
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, encoder_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = V.view(batch_size, encoder_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Compute attention scores
+        A = Q @ K.transpose(-1, -2)
+        A = A / (self.head_dim ** 0.5)  # scale by sqrt(d_k)
+        A = torch.softmax(A, dim=-1)
+        A = self.dropout(A)
+        
+        # Apply attention
+        H = A @ V
+        
+        # Reshape back
+        H = H.transpose(1, 2).contiguous().view(batch_size, seq_len, decoder_embed_dim)
+        H = self.W_o(H)
+        
+        return H
 
 
 class DecoderSelfAttention(nn.Module):
-    """Wrapper for MLA Decoder Self-Attention to maintain interface compatibility"""
     def __init__(self, decoder_embed_dim, num_heads=1, dropout=0.1):
         super(DecoderSelfAttention, self).__init__()
+        self.decoder_embed_dim = decoder_embed_dim
+        self.num_heads = num_heads
+        self.head_dim = decoder_embed_dim // num_heads
         
-        # Aggressive compression for decoder self-attention (highest memory usage during generation)
-        kv_lora_rank = max(decoder_embed_dim // 3, 42)  # 3x compression
-        qk_rope_head_dim = min(32, decoder_embed_dim // num_heads // 2)  # Adaptive RoPE dim
+        # Ensure decoder_embed_dim is divisible by num_heads
+        assert decoder_embed_dim % num_heads == 0, "decoder_embed_dim must be divisible by num_heads"
         
-        # Use MLA implementation
-        self.mla_attention = MLADecoderSelfAttention(
-            embed_dim=decoder_embed_dim,
-            num_heads=num_heads,
-            kv_lora_rank=kv_lora_rank,
-            qk_rope_head_dim=qk_rope_head_dim,
-            dropout=dropout
-        )
+        # Define the linear layers
+        self.W_q = nn.Linear(decoder_embed_dim, decoder_embed_dim) 
+        self.W_k = nn.Linear(decoder_embed_dim, decoder_embed_dim)
+        self.W_v = nn.Linear(decoder_embed_dim, decoder_embed_dim)
+        self.W_o = nn.Linear(decoder_embed_dim, decoder_embed_dim)
+        
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
-        return self.mla_attention(x, mask)
+        batch_size, seq_len, decoder_embed_dim = x.shape
+
+        # Compute Q, K, V
+        Q = self.W_q(x)
+        K = self.W_k(x)
+        V = self.W_v(x)
+        
+        # Reshape for multi-head attention
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Compute attention scores
+        A = Q @ K.transpose(-1, -2)
+        A = A / (self.head_dim ** 0.5)  # scale by sqrt(d_k)
+        
+        # Apply causal mask for autoregressive generation
+        if mask is not None:
+            A = A.masked_fill(mask == 0, -1e9)
+        
+        A = torch.softmax(A, dim=-1)
+        A = self.dropout(A)
+        
+        # Apply attention
+        H = A @ V
+        
+        # Reshape back
+        H = H.transpose(1, 2).contiguous().view(batch_size, seq_len, decoder_embed_dim)
+        H = self.W_o(H)
+        
+        return H
 
 
 class MLP(nn.Module):
@@ -285,63 +368,75 @@ class EncoderDecoder(nn.Module):
             output = self.output_projection(decoded)
             return output
         else:
-            # Inference mode - autoregressive generation
+            # Inference mode - autoregressive generation with improved stopping
             batch_size = images.size(0)
             device = images.device
             
             # Start with start token
             current_sequence = self.decoder_embedding.get_start_token(batch_size, device)
             
-            # Track which sequences have finished
+            # Track which sequences have finished and their final lengths
             finished_sequences = torch.zeros(batch_size, dtype=torch.bool, device=device)
+            final_sequences = []
             
             for step in range(max_length):
-                # Process full sequence
                 decoded = self.decoder_embedding(current_sequence)
                 
                 # Create causal mask for current sequence length
                 seq_len = current_sequence.size(1)
                 mask = self.create_causal_mask(seq_len, device)
                 
-                # Pass through decoder blocks
                 for decoder_block in self.decoder_blocks:
                     decoded = decoder_block(decoded, encoded, mask)
-                
                 logits = self.output_projection(decoded)
-                next_token_logits = logits[:, -1, :]  # [batch_size, vocab_size]
                 
                 # Apply temperature scaling for better sampling
                 if temperature != 1.0:
-                    next_token_logits = next_token_logits / temperature
+                    logits = logits / temperature
                 
                 # Get next token - use argmax for now, but could add sampling
+                next_token_logits = logits[:, -1, :]  # [batch_size, vocab_size]
                 next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)  # [batch_size, 1]
                 
-                # Add tokens to sequences that haven't finished
-                # For finished sequences, keep adding pad tokens
-                for i in range(batch_size):
-                    if finished_sequences[i]:
-                        next_token[i] = self.decoder_embedding.pad_token
-                
+                # Only add tokens to sequences that haven't finished
                 current_sequence = torch.cat([current_sequence, next_token], dim=1)
                 
                 # Update finished sequences - a sequence is finished when it generates a finish token
                 new_finishes = (next_token.squeeze(-1) == self.decoder_embedding.finish_token)
                 finished_sequences = finished_sequences | new_finishes
                 
-                # Early stopping: if all sequences are finished or we've generated enough digits
+                # Early stopping: if all sequences are finished
                 if finished_sequences.all():
                     break
-                    
-                # Also stop if we've generated too many digits (safety check)
-                digit_count = 0
-                for token in current_sequence[0]:  # Check first sequence as example
-                    if 0 <= token <= 9:
-                        digit_count += 1
-                if digit_count >= 8:  # Don't generate more than 8 digits
-                    break
             
-            return current_sequence
+            # FIXED: Return sequences without padding - trim each sequence to its finish token
+            result_sequences = []
+            for i in range(batch_size):
+                seq = current_sequence[i]
+                # Find finish token position
+                finish_positions = (seq == self.decoder_embedding.finish_token).nonzero(as_tuple=True)[0]
+                if len(finish_positions) > 0:
+                    # Include finish token, trim everything after
+                    finish_pos = finish_positions[0].item()
+                    trimmed_seq = seq[:finish_pos + 1]
+                else:
+                    # No finish token found, use full sequence
+                    trimmed_seq = seq
+                result_sequences.append(trimmed_seq)
+            
+            # Pad result sequences to same length for batch processing (minimal padding)
+            max_result_len = max(len(seq) for seq in result_sequences)
+            padded_results = []
+            for seq in result_sequences:
+                if len(seq) < max_result_len:
+                    padding = torch.full((max_result_len - len(seq),), self.decoder_embedding.pad_token, 
+                                       dtype=seq.dtype, device=seq.device)
+                    padded_seq = torch.cat([seq, padding])
+                else:
+                    padded_seq = seq
+                padded_results.append(padded_seq)
+            
+            return torch.stack(padded_results)
 
 
 class EncoderDecoderMNISTClassifier(BaseModel):
@@ -370,8 +465,8 @@ class EncoderDecoderMNISTClassifier(BaseModel):
             patch_size=7,
             encoder_embed_dim=64,
             decoder_embed_dim=64,
-            num_layers=4, # 4 encoder layers
-            num_heads=8,  # 8 attention heads
+            num_layers=2, # 4 encoder layers
+            num_heads=2,  # 8 attention heads
             dropout=0.1
         )
     

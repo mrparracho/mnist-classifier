@@ -331,6 +331,7 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
         epoch (int, optional): Current epoch number for logging
         max_length (int): Maximum sequence length for generation
         verbose (bool): Whether to print detailed logs
+
         
     Returns:
         dict: Dictionary containing all evaluation metrics
@@ -618,6 +619,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         checkpoint_dir (str): Directory to save model checkpoints
         length_loss_weight (float): Weight for the length prediction loss
         max_seq_len (int): Maximum sequence length supported by the model
+
         
     Returns:
         model: Trained model
@@ -778,6 +780,7 @@ def main():
     parser.add_argument("--max-output-length", type=int, default=None, help="Maximum output sequence length (None = grid capacity)")
     parser.add_argument("--min-digits", type=int, default=1, help="Minimum number of digits per sample")
     parser.add_argument("--max-digits", type=int, default=None, help="Maximum number of digits per sample (None = limited by max_output_length)")
+
     args = parser.parse_args()
     
     # Log command line arguments
@@ -840,6 +843,7 @@ def main():
     logger.info(f"Model configuration:")
     logger.info(f"  Max output length: {effective_max_output_length} digits")
     logger.info(f"  Max sequence length: {max_seq_len} tokens (including start/finish)")
+
     
     # Create the Encoder-Decoder model with dynamic sizing
     model = EncoderDecoder(
@@ -866,7 +870,8 @@ def main():
         epochs=args.epochs,
         learning_rate=args.lr,
         checkpoint_dir=args.checkpoint_dir,
-        max_seq_len=max_seq_len  # Pass the calculated max sequence length
+        max_seq_len=max_seq_len,  # Pass the calculated max sequence length
+
     )
     
     # Export model for inference

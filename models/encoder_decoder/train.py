@@ -15,6 +15,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm import tqdm
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
+import numpy as np
+from PIL import Image
 
 # Add the parent directory to the Python path
 import sys
@@ -65,25 +69,31 @@ def setup_logging(base_dir):
 
 class MNISTSequenceDataset(Dataset):
     """Dataset that creates sequences from MNIST digits with variable content in fixed grid"""
-    def __init__(self, mnist_dataset, max_grid_size=10, max_output_length=None, length_weights=None, 
-                 min_digits=1, max_digits=None, fill_strategy='random'):
-        self.mnist_dataset = mnist_dataset
-        self.max_grid_size = max_grid_size  # e.g., 10 for 10x10 grid
+    def __init__(self, mnist_dataset, max_grid_size=10, max_output_length=None, length_weights=None, static_length=None):
+        """
+        Initialize the MNIST Sequence Dataset.
         
-        # Set max_output_length to grid capacity if not specified
+        Args:
+            mnist_dataset: The base MNIST dataset
+            max_grid_size: Maximum grid size (e.g., 10 for 10x10 grid)
+            max_output_length: Maximum output sequence length (None = grid capacity)
+            length_weights: Weights for different sequence lengths
+            static_length: If specified, force all sequences to have exactly this many digits
+        """
+        self.mnist_dataset = mnist_dataset
+        self.max_grid_size = max_grid_size
+        self.full_grid_size = max_grid_size * 28  # 28 is MNIST image size
+        
+        # FIXED: Set max_output_length to grid capacity if not specified
         if max_output_length is None:
             self.max_output_length = max_grid_size * max_grid_size  # e.g., 10*10 = 100
         else:
             self.max_output_length = max_output_length
-            
-        self.min_digits = min_digits
-        self.max_digits = max_digits if max_digits is not None else min(max_grid_size * max_grid_size, self.max_output_length)
-        self.fill_strategy = fill_strategy  # 'random', 'zeros', 'noise'
         
         # Length distribution weights - if None, use uniform distribution
         if length_weights is None:
-            # Equal probability for each length from min_digits to max_digits
-            num_lengths = self.max_digits - self.min_digits + 1
+            # Equal probability for each length from 1 to max_output_length
+            num_lengths = self.max_output_length
             self.length_weights = [1.0] * num_lengths
         else:
             self.length_weights = length_weights
@@ -101,43 +111,45 @@ class MNISTSequenceDataset(Dataset):
         self.finish_token = 11  # <finish>
         self.pad_token = 12     # <pad>
         
-        logger.info(f"Dataset configuration:")
-        logger.info(f"  Max grid size: {self.max_grid_size}x{self.max_grid_size}")
-        logger.info(f"  Full image size: {self.full_grid_size}x{self.full_grid_size}")
-        logger.info(f"  Digit range: {self.min_digits}-{self.max_digits} per sample")
-        logger.info(f"  Fill strategy: {self.fill_strategy}")
+        # STATIC LENGTH: Override all length settings if static_length is specified
+        if static_length is not None:
+            # Validate static_length against grid constraints
+            max_possible_digits = max_grid_size * max_grid_size
+            if static_length < 1:
+                raise ValueError(f"static_length must be >= 1, got {static_length}")
+            if static_length > max_possible_digits:
+                raise ValueError(f"static_length ({static_length}) cannot exceed grid capacity ({max_possible_digits}) for {max_grid_size}x{max_grid_size} grid")
+            
+            self.static_length = static_length
+            # Override length weights to only allow static_length
+            self.length_weights = [1.0]  # Single weight for static length
+            logger.info(f"STATIC LENGTH MODE: {static_length} digits per sequence")
+        else:
+            self.static_length = None
         
     def __len__(self):
-        return len(self.mnist_dataset) // self.max_digits  # Ensure we have enough data
-    
-    def _get_filler_image(self):
-        """Get a filler image based on fill strategy"""
-        if self.fill_strategy == 'zeros':
-            return torch.zeros(1, self.single_image_size, self.single_image_size)
-        elif self.fill_strategy == 'noise':
-            # Generate small amount of noise (like paper texture)
-            return torch.randn(1, self.single_image_size, self.single_image_size) * 0.1
-        elif self.fill_strategy == 'random':
-            # Use a random MNIST image but don't include its label
-            random_idx = torch.randint(0, len(self.mnist_dataset), (1,)).item()
-            image, _ = self.mnist_dataset[random_idx]
-            return image
-        else:
-            return torch.zeros(1, self.single_image_size, self.single_image_size)
+        # Allow image reuse across samples - this dramatically increases dataset size
+        # For a 3x3 grid, we can create many more samples by reusing images
+        # Use a large multiplier to create sufficient training samples
+        return len(self.mnist_dataset) * 10  # 10x more samples by reusing images
     
     def __getitem__(self, idx):
-        # Sample how many actual digits to include
-        num_digits = int(torch.multinomial(torch.tensor(self.length_probs, dtype=torch.float32), 1).item())
-        num_digits = self.min_digits + num_digits  # Offset by min_digits
-        num_digits = min(num_digits, self.max_digits)  # Ensure we don't exceed max
+        # STATIC LENGTH: Use fixed length if specified, otherwise sample randomly
+        if self.static_length is not None:
+            num_digits = self.static_length
+        else:
+            # FIXED: Sample how many actual digits to include with uniform distribution
+            sampled_index = int(torch.multinomial(torch.tensor(self.length_probs, dtype=torch.float32), 1).item())
+            # sampled_index is 0-based, maps to lengths 1 to max_output_length
+            num_digits = sampled_index + 1  # This gives us lengths 1 to max_output_length
         
-        # Get actual MNIST digits and their labels
+        # Get actual MNIST digits and their labels - allow reuse across samples
         digit_images = []
         digit_labels = []
         
-        start_idx = idx * self.max_digits
+        # Use modulo to allow image reuse - this creates much more training data
         for i in range(num_digits):
-            data_idx = (start_idx + i) % len(self.mnist_dataset)
+            data_idx = (idx + i * 1000) % len(self.mnist_dataset)  # Spread out image selection
             image, label = self.mnist_dataset[data_idx]
             digit_images.append(image)
             digit_labels.append(label)
@@ -176,8 +188,10 @@ class MNISTSequenceDataset(Dataset):
                 full_grid_image[:, start_h:end_h, start_w:end_w] = image
                 placed_labels.append((pos, label))  # Store position and label
             else:
-                # Fill with background
-                filler_image = self._get_filler_image()
+                # Fill with black/empty background for all unused positions
+                # This ensures consistency between static and variable length modes
+                # and makes it clear which positions should be empty
+                filler_image = torch.zeros(1, self.single_image_size, self.single_image_size)
                 full_grid_image[:, start_h:end_h, start_w:end_w] = filler_image
         
         # Sort labels by position to create consistent reading order (left-to-right, top-to-bottom)
@@ -189,15 +203,8 @@ class MNISTSequenceDataset(Dataset):
         target_sequence.extend(sequence_labels)  # add the digit labels in order
         target_sequence.append(self.finish_token)  # finish token
         
-        # Pad sequence to max_output_length + 2 (for start and finish tokens)
-        max_seq_length = self.max_output_length + 2
-        while len(target_sequence) < max_seq_length:
-            target_sequence.append(self.pad_token)
-        
-        # Truncate if too long (shouldn't happen with our logic, but just in case)
-        target_sequence = target_sequence[:max_seq_length]
-        
-        # Convert to tensor
+        # NO PADDING: Return sequence at natural length
+        # This eliminates wasted computation and cleaner learning signal
         target_sequence = torch.tensor(target_sequence, dtype=torch.long)
         
         return full_grid_image, target_sequence
@@ -222,17 +229,17 @@ def get_device():
     
     return device
 
-def get_data_loaders(batch_size=64, data_dir=None, balance_lengths=True, max_grid_size=10, 
-                     max_output_length=None):
+def get_data_loaders(batch_size=64, data_dir=None, max_grid_size=10, 
+                     max_output_length=None, static_length=None):
     """
     Create data loaders for training and testing MNIST dataset.
     
     Args:
         batch_size (int): Batch size for training and testing
         data_dir (str): Directory to store the dataset
-        balance_lengths (bool): Whether to use balanced length distribution
         max_grid_size (int): Maximum grid size (e.g., 10 for 10x10 grid)
         max_output_length (int): Maximum output sequence length (None = grid capacity)
+        static_length (int): If specified, force all sequences to have exactly this many digits
         
     Returns:
         tuple: (train_loader, test_loader)
@@ -244,9 +251,7 @@ def get_data_loaders(batch_size=64, data_dir=None, balance_lengths=True, max_gri
     if max_output_length is None:
         max_output_length = max_grid_size * max_grid_size  # e.g., 10*10 = 100
         
-    logger.info(f"Data loader configuration:")
-    logger.info(f"  Max grid size: {max_grid_size}x{max_grid_size} = {max_grid_size * max_grid_size} positions")
-    logger.info(f"  Max output length: {max_output_length} digits")
+    logger.info(f"Data loader: {max_grid_size}x{max_grid_size} grid, {max_output_length} digits max")
     
     # Define transformations
     transform = transforms.Compose([
@@ -273,54 +278,68 @@ def get_data_loaders(batch_size=64, data_dir=None, balance_lengths=True, max_gri
         transform=transform
     )
     
-    # Configure length weights for better balance
-    if balance_lengths:
-        # For large grids, focus on smaller sequences initially to avoid overwhelming the model
-        if max_output_length > 20:
-            # Weight heavily toward smaller sequences for large grids
-            length_weights = [3.0, 2.0, 1.5, 1.0, 1.0] + [0.5] * (max_output_length - 5)
-            logger.info(f"Using weighted length distribution: favoring shorter sequences for large grid")
-        else:
-            # Equal probability for smaller grids
-            length_weights = [1.0] * min(10, max_output_length)  # Up to 10 equal weights
-            logger.info(f"Using balanced length distribution: equal probability for lengths 1-{min(10, max_output_length)}")
-    else:
-        # Use uniform random (original behavior)
-        length_weights = None
-        logger.info("Using uniform random length distribution")
+    # Use uniform distribution over all possible sequence lengths
+    # For a 10x10 grid, this means uniform probability for lengths 1-100
+    max_possible_digits = max_grid_size * max_grid_size  # e.g., 100 for 10x10 grid
+    length_weights = [1.0] * max_possible_digits  # Uniform distribution
+    
+    # Log dataset configuration once
+    logger.info(f"Dataset: {max_grid_size}x{max_grid_size} grid, {max_output_length} digits max, uniform distribution")
     
     # Wrap with sequence dataset
     train_sequence_dataset = MNISTSequenceDataset(
         train_dataset, 
         max_grid_size=max_grid_size, 
         max_output_length=max_output_length,
-        length_weights=length_weights
+        length_weights=length_weights,
+        static_length=static_length
     )
     test_sequence_dataset = MNISTSequenceDataset(
         test_dataset, 
         max_grid_size=max_grid_size, 
         max_output_length=max_output_length,
-        length_weights=length_weights
+        length_weights=length_weights,
+        static_length=static_length
     )
     
-    # Create data loaders
-    train_loader = DataLoader(
+    # Log dataset sizes
+    logger.info(f"Dataset sizes: {len(train_sequence_dataset)} train samples, {len(test_sequence_dataset)} test samples")
+    logger.info(f"  (with image reuse: {len(train_sequence_dataset) // len(train_dataset)}x more samples)")
+    
+    # Create data loaders with length-based batching for optimal efficiency
+    train_batch_sampler = LengthBasedBatchSampler(
         train_sequence_dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=4
+        length_tolerance=3  # Allow max 3-token difference within batch
     )
     
+    train_loader = DataLoader(
+        train_sequence_dataset, 
+        batch_sampler=train_batch_sampler,
+        num_workers=4,
+        collate_fn=collate_variable_length  # Minimal padding within length groups
+    )
+    
+    # For evaluation, use regular batching since we want representative sampling
     test_loader = DataLoader(
         test_sequence_dataset, 
         batch_size=batch_size, 
         shuffle=False, 
-        num_workers=4
+        num_workers=4,
+        collate_fn=collate_variable_length
     )
+    
+    logger.info(f"Batching: {batch_size} batch size, {len(train_batch_sampler)} train batches, {len(test_loader)} test batches")
+    
+    # Log static length configuration if active
+    if static_length is not None:
+        max_possible_digits = max_grid_size * max_grid_size
+        logger.info(f"STATIC LENGTH MODE: {static_length} digits per sequence (max {max_possible_digits})")
     
     return train_loader, test_loader
 
-def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbose=True):
+def evaluate_model(model, test_loader, device, epoch=None, max_length=50, verbose=True, max_debug_images=3):
     """
     Comprehensive evaluation of the Encoder-Decoder MNIST model.
     
@@ -330,15 +349,12 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
         device (torch.device): Device to evaluate on
         epoch (int, optional): Current epoch number for logging
         max_length (int): Maximum sequence length for generation
-        verbose (bool): Whether to print detailed logs
-
-        
-    Returns:
-        dict: Dictionary containing all evaluation metrics
+        verbose (bool): Whether to print detailed results
+        max_debug_images (int): Maximum number of debug images to save (default: 3)
     """
     model.eval()
     
-    # Initialize comprehensive metrics
+    # Initialize counters for detailed analysis
     total_samples = 0
     perfect_matches = 0
     length_errors = 0
@@ -346,16 +362,21 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
     order_errors_correct_content = 0
     partial_correct_positions = 0
     total_possible_positions = 0
-    no_finish_token = 0
-    no_start_token = 0
+    
+    # Token structure analysis
     start_token_correct = 0
+    no_start_token = 0
     finish_token_correct = 0
+    no_finish_token = 0
     
     # Length distribution tracking
     length_distribution = {}
     
     # Digit confusion matrix
     digit_confusion_matrix = {}
+    
+    # Debug image counter
+    debug_images_saved = 0
     
     def extract_digits_from_sequence(sequence):
         """Extract digits from a sequence, handling start/finish/pad tokens."""
@@ -383,16 +404,16 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
         epoch_desc = f"Epoch {epoch} [Test]" if epoch is not None else "Evaluation"
         progress_bar = tqdm(test_loader, desc=epoch_desc)
         
-        for batch_idx, (data, target_sequence) in enumerate(progress_bar):
+        for batch_idx, (data, target_sequence, target_lengths) in enumerate(progress_bar):
             # Move data to device
-            data, target_sequence = data.to(device), target_sequence.to(device)
+            data, target_sequence, target_lengths = data.to(device), target_sequence.to(device), target_lengths.to(device)
             
             # Forward pass - inference mode (no target_sequence)
             predicted_sequence = model(data, max_length=max_length)
             
             # Evaluate each sample in the batch
             for i in range(data.size(0)):
-                target_seq = target_sequence[i]
+                target_seq = target_sequence[i][:target_lengths[i]]  # Use actual length
                 pred_seq = predicted_sequence[i]
                 total_samples += 1
                 
@@ -410,9 +431,21 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
                 pred_digits = extract_digits_from_sequence(pred_seq)
                 
                 if verbose and i < 3 and batch_idx == 0:
-                    logger.info(f"Example {i}:")
-                    logger.info(f"  Target sequence: {target_seq.tolist()}")
-                    logger.info(f"  Predicted sequence: {pred_seq.tolist()}")
+                    logger.info(f"Example {i}: Target {target_digits}, Predicted {pred_digits}")
+                    
+                    # Save debug image for visual inspection (limit number of images)
+                    input_image = data[i]  # [1, H, W] tensor
+                    save_mnist_image_for_debug(
+                        input_image, 
+                        "mnist_debug", 
+                        target_digits, 
+                        pred_digits, 
+                        epoch if epoch is not None else 0, 
+                        batch_idx, 
+                        i
+                    )
+                    debug_images_saved += 1
+                    logger.info(f"  Debug image {debug_images_saved}/{max_debug_images} saved")
                 
                 # Check token structure
                 has_start_target, has_finish_target = has_proper_tokens(target_seq)
@@ -604,8 +637,52 @@ def evaluate_model(model, test_loader, device, epoch=None, max_length=12, verbos
             'digit_confusion_matrix': {}
         }
 
+def calculate_length_aware_loss(output, target, target_lengths):
+    """Calculate loss with length-aware approach - FIXED version"""
+    # Reshape for cross entropy (use reshape instead of view for better compatibility)
+    batch_size, seq_len, vocab_size = output.shape
+    output_flat = output.reshape(-1, vocab_size)
+    target_flat = target.reshape(-1)
+    
+    # FIXED: Don't ignore padding tokens - model needs to learn to predict finish tokens
+    # instead of continuing to generate padding
+    losses = F.cross_entropy(output_flat, target_flat, reduction='none')
+    
+    # Create mask to only calculate loss on valid positions (before padding)
+    # This ensures model learns proper sequence termination
+    mask = torch.arange(seq_len, device=target.device).unsqueeze(0) < (target_lengths - 1).unsqueeze(1)
+    mask = mask.reshape(-1)
+    
+    # Apply mask and calculate mean loss only over valid positions
+    masked_losses = losses * mask.float()
+    valid_positions = mask.sum()
+    
+    return masked_losses.sum() / max(valid_positions, 1)
+
+def count_digit_length(seq, seq_length):
+    """Count digits in a sequence (excluding special tokens) - OPTIMIZED VERSION"""
+    # Early termination for common cases
+    if seq_length < 3:  # Need at least start + digit + finish
+        return 0
+    
+    length = 0
+    start_found = False
+    
+    # Only iterate up to seq_length (not full tensor length)
+    for i in range(seq_length):
+        token = seq[i].item()  # Convert to scalar once
+        
+        if token == 10:  # start token
+            start_found = True
+        elif token == 11:  # finish token
+            break  # Early termination
+        elif start_found and 0 <= token <= 9:  # digit token
+            length += 1
+    
+    return length
+
 def train_model(model, train_loader, test_loader, device, epochs=10, learning_rate=0.001, 
-                checkpoint_dir="./checkpoints", length_loss_weight=0.5, max_seq_len=102):
+                checkpoint_dir="./checkpoints", length_loss_weight=0.5, max_seq_len=102, max_grid_size=10):
     """
     Train the Encoder-Decoder MNIST model.
     
@@ -619,7 +696,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         checkpoint_dir (str): Directory to save model checkpoints
         length_loss_weight (float): Weight for the length prediction loss
         max_seq_len (int): Maximum sequence length supported by the model
-
+        max_grid_size (int): Maximum grid size for the model
         
     Returns:
         model: Trained model
@@ -642,78 +719,53 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         running_length_loss = 0.0
         
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
-        for batch_idx, (data, target_sequence) in enumerate(progress_bar):
+        for batch_idx, (data, target_sequence, target_lengths) in enumerate(progress_bar):
             # Move data to device
-            data, target_sequence = data.to(device), target_sequence.to(device)
+            data, target_sequence, target_lengths = data.to(device), target_sequence.to(device), target_lengths.to(device)
             
-            # Zero the parameter gradients
+            # Zero gradients
             optimizer.zero_grad()
             
-            # Forward pass - model expects target_sequence for training
-            # For teacher forcing, use input sequence (all tokens except the last one)
-            # Target for loss is the shifted sequence (all tokens except the first one)
-            input_sequence = target_sequence[:, :-1]  # Remove last token
-            target_for_loss = target_sequence[:, 1:]   # Remove first token (start token)
+            # Forward pass
+            output = model(data, target_sequence[:, :-1])  # Exclude last token for teacher forcing
             
-            output = model(data, target_sequence=input_sequence)
+            # Prepare targets (exclude first token - start token)
+            target_for_loss = target_sequence[:, 1:]  # Remove start token
             
-            # Debug: Print shapes and first batch on first iteration
-            if batch_idx == 0 and epoch == 0:
-                logger.info(f"Input sequence shape: {input_sequence.shape}")
-                logger.info(f"Target for loss shape: {target_for_loss.shape}")
-                logger.info(f"Output shape: {output.shape}")
-                logger.info(f"First input sequence: {input_sequence[0]}")
-                logger.info(f"First target for loss: {target_for_loss[0]}")
-                logger.info(f"First output (argmax): {torch.argmax(output[0], dim=-1)}")
+            # Calculate loss using length-aware approach
+            primary_loss = calculate_length_aware_loss(output, target_for_loss, target_lengths)
             
-            # Reshape output and target for loss calculation
-            # output: [batch_size, seq_len, vocab_size]
-            # target: [batch_size, seq_len]
-            output_flat = output.reshape(-1, output.size(-1))  # [batch_size * seq_len, vocab_size]
-            target_flat = target_for_loss.reshape(-1)  # [batch_size * seq_len]
-            
-            # Calculate primary loss (next token prediction)
-            primary_loss = criterion(output_flat, target_flat)
-            
-            # Calculate length prediction loss
-            # Count actual sequence lengths (excluding start/finish/pad tokens)
-            def count_digit_length(seq):
-                """Count digits in a sequence (excluding special tokens)"""
-                length = 0
-                start_found = False
-                for token in seq:
-                    if token == 10:  # start token
-                        start_found = True
-                    elif token == 11:  # finish token
-                        break
-                    elif start_found and 0 <= token <= 9:  # digit token
-                        length += 1
-                return length
-            
-            # Get actual lengths for each sequence in the batch
+            # Add length prediction loss to improve length accuracy - OPTIMIZED VERSION
+            # Count actual digit lengths for length prediction loss
             actual_lengths = []
             for i in range(target_sequence.size(0)):
-                length = count_digit_length(target_sequence[i])
+                length = count_digit_length(target_sequence[i], target_lengths[i])
                 actual_lengths.append(length)
             actual_lengths = torch.tensor(actual_lengths, dtype=torch.float32, device=device)
             
-            # Predict lengths from finish token positions in output
-            predicted_lengths = []
-            for i in range(output.size(0)):
-                # Find where the model predicts finish token (token 11)
-                finish_probs = torch.softmax(output[i], dim=-1)[:, 11]  # Probability of finish token at each position
-                # Use expectation of finish token position as length prediction
-                positions = torch.arange(1, output.size(1) + 1, dtype=torch.float32, device=device)
-                expected_finish_pos = torch.sum(finish_probs * positions)
-                # Subtract 1 because position 1 would mean 0 digits (just start + finish)
-                predicted_length = torch.clamp(expected_finish_pos - 1, min=0.0, max=10.0)
-                predicted_lengths.append(predicted_length)
-            predicted_lengths = torch.stack(predicted_lengths)
+            # OPTIMIZED: Vectorized length prediction from finish token positions
+            batch_size, seq_len, vocab_size = output.shape
+            
+            # Get finish token probabilities for all positions at once
+            finish_probs = torch.softmax(output, dim=-1)[:, :, 11]  # [batch, seq_len]
+            
+            # Create position weights for each sequence
+            positions = torch.arange(1, seq_len + 1, dtype=torch.float32, device=device).unsqueeze(0)  # [1, seq_len]
+            
+            # Mask out invalid positions based on target_lengths
+            valid_mask = torch.arange(seq_len, device=device).unsqueeze(0) < (target_lengths - 1).unsqueeze(1)  # [batch, seq_len]
+            
+            # Calculate expected finish positions (vectorized)
+            masked_finish_probs = finish_probs * valid_mask.float()
+            expected_finish_pos = torch.sum(masked_finish_probs * positions, dim=1)  # [batch]
+            
+            # Clamp predictions to valid range
+            predicted_lengths = torch.clamp(expected_finish_pos, min=0.0, max=float(max_grid_size * max_grid_size))
             
             # Length prediction loss
             length_loss = length_criterion(predicted_lengths, actual_lengths)
             
-            # Combined loss
+            # Combined loss with length prediction
             total_loss = primary_loss + length_loss_weight * length_loss
             
             # Backward pass and optimize
@@ -727,13 +779,16 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
             # Update progress bar
             progress_bar.set_postfix({
                 "loss": running_loss / (batch_idx + 1),
-                "len_loss": running_length_loss / (batch_idx + 1)
+                "length_loss": running_length_loss / (batch_idx + 1)
             })
         
         # Evaluation phase using the comprehensive evaluation function
-        # Use the model's configured maximum sequence length
-        max_eval_length = max_seq_len  # Use the model's configured maximum sequence length
-        results = evaluate_model(model, test_loader, device, epoch=epoch+1, max_length=max_eval_length, verbose=True)
+        # FIXED: Use max_length that scales dynamically with grid size
+        # For 2x2 grid: max_length ~10, for 10x10 grid: max_length ~210
+        max_possible_sequence = max_grid_size * max_grid_size + 2  # +2 for start/finish
+        max_eval_length = min(max_possible_sequence + 10, max_seq_len)  # Don't exceed model's max_seq_len
+        logger.info(f"Evaluation: {max_eval_length} tokens max (model supports {max_seq_len})")
+        results = evaluate_model(model, test_loader, device, epoch=epoch+1, max_length=max_eval_length, verbose=True, max_debug_images=3)
         accuracy = results['perfect_accuracy']
         
         # Save model if it's the best so far
@@ -760,6 +815,138 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
     logger.info(f"Training completed. Best accuracy: {best_accuracy:.2f}%")
     return model
 
+def collate_variable_length(batch):
+    """
+    Optimized collate function for variable-length sequences.
+    Handles batching with minimal padding for efficiency.
+    """
+    images, sequences = zip(*batch)
+    
+    # Stack images (they're all the same size)
+    images = torch.stack(images, dim=0)
+    
+    # Get sequence lengths before padding
+    lengths = torch.tensor([len(seq) for seq in sequences], dtype=torch.long)
+    
+    # Use PyTorch's built-in pad_sequence for efficiency
+    sequences = pad_sequence(list(sequences), batch_first=True, padding_value=12)  # 12 is pad_token
+    
+    return images, sequences, lengths
+
+class LengthBasedBatchSampler:
+    """
+    Batch sampler that groups sequences of similar lengths together.
+    This minimizes padding and maximizes training efficiency.
+    """
+    def __init__(self, dataset, batch_size, shuffle=True, length_tolerance=2):
+        """
+        Args:
+            dataset: The dataset to sample from
+            batch_size: Target batch size
+            shuffle: Whether to shuffle the data
+            length_tolerance: Maximum length difference within a batch
+        """
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.length_tolerance = length_tolerance
+        
+        # Pre-compute sequence lengths for all samples
+        self._compute_lengths()
+        
+    def _compute_lengths(self):
+        """Pre-compute sequence lengths for efficient batching"""
+        self.lengths = []
+        for i in range(len(self.dataset)):
+            # Get a sample to compute its length
+            _, sequence = self.dataset[i]
+            self.lengths.append(len(sequence))
+    
+    def __iter__(self):
+        """Generate batches grouped by similar sequence lengths"""
+        # Create indices sorted by length
+        indices = list(range(len(self.dataset)))
+        
+        if self.shuffle:
+            # Shuffle within length groups for better training diversity
+            import random
+            random.shuffle(indices)
+        
+        # Sort by length to group similar lengths together
+        indices.sort(key=lambda i: self.lengths[i])
+        
+        # Create batches of similar lengths
+        batches = []
+        current_batch = []
+        current_length = None
+        
+        for idx in indices:
+            seq_length = self.lengths[idx]
+            
+            # Start new batch if length difference is too large or batch is full
+            if (current_length is not None and 
+                abs(seq_length - current_length) > self.length_tolerance) or \
+               len(current_batch) >= self.batch_size:
+                
+                if current_batch:
+                    batches.append(current_batch)
+                current_batch = [idx]
+                current_length = seq_length
+            else:
+                current_batch.append(idx)
+                if current_length is None:
+                    current_length = seq_length
+        
+        # Add final batch
+        if current_batch:
+            batches.append(current_batch)
+        
+        # Shuffle batch order if requested
+        if self.shuffle:
+            import random
+            random.shuffle(batches)
+        
+        # Yield batches
+        for batch in batches:
+            yield batch
+    
+    def __len__(self):
+        """Return approximate number of batches"""
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+
+def save_mnist_image_for_debug(image_tensor, filename, target_digits, predicted_digits, epoch, batch_idx, sample_idx):
+    """
+    Save MNIST image for debugging - PNG only.
+    
+    Args:
+        image_tensor: Input image tensor [1, H, W]
+        filename: Base filename to save
+        target_digits: Target digit sequence
+        predicted_digits: Predicted digit sequence
+        epoch: Current epoch
+        batch_idx: Batch index
+        sample_idx: Sample index within batch
+    """
+    try:
+        # Create debug directory if it doesn't exist
+        debug_dir = os.path.join(os.path.dirname(__file__), "debug_images")
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        # Convert tensor to numpy
+        img_np = image_tensor.squeeze().cpu().numpy()
+        
+        # Save as PNG for easy viewing
+        png_filename = f"{filename}_e{epoch}_b{batch_idx}_s{sample_idx}.png"
+        png_path = os.path.join(debug_dir, png_filename)
+        
+        # Normalize to 0-255 range for PNG
+        img_normalized = ((img_np - img_np.min()) / (img_np.max() - img_np.min()) * 255).astype(np.uint8)
+        pil_image = Image.fromarray(img_normalized, mode='L')  # L mode for grayscale
+        pil_image.save(png_path)
+        
+        logger.info(f"  Debug image saved: {png_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save debug image: {e}")
 
 def main():
     """Main function to train the Encoder-Decoder MNIST model."""
@@ -778,16 +965,19 @@ def main():
     parser.add_argument("--max-grid-size", type=int, default=10, help="Maximum grid size (e.g., 10 for 10x10 grid)")
     parser.add_argument("--patch-size", type=int, default=14, help="Patch size for vision transformer")
     parser.add_argument("--max-output-length", type=int, default=None, help="Maximum output sequence length (None = grid capacity)")
-    parser.add_argument("--min-digits", type=int, default=1, help="Minimum number of digits per sample")
-    parser.add_argument("--max-digits", type=int, default=None, help="Maximum number of digits per sample (None = limited by max_output_length)")
-
+    parser.add_argument("--static-length", type=int, default=None, help="If specified, force all sequences to have exactly this many digits")
     args = parser.parse_args()
     
     # Log command line arguments
     logger.info("COMMAND LINE ARGUMENTS:")
     for arg, value in vars(args).items():
         logger.info(f"  --{arg.replace('_', '-')}: {value}")
-    logger.info("")
+    
+    # Highlight static length mode if active
+    if args.static_length is not None:
+        logger.info(f"STATIC LENGTH MODE: All sequences will have {args.static_length} digits")
+    else:
+        logger.info(f"VARIABLE LENGTH MODE: Sequences will have 1-{args.max_grid_size * args.max_grid_size} digits")
     
     # Set default paths if not provided
     if args.data_dir is None:
@@ -814,11 +1004,7 @@ def main():
     single_image_size = 28  # MNIST image size
     full_image_size = single_image_size * max_grid_size  # e.g., 28*10=280 for 10x10
     
-    logger.info(f"Image configuration:")
-    logger.info(f"  Max grid size: {max_grid_size}x{max_grid_size}")
-    logger.info(f"  Individual cell size: {single_image_size}x{single_image_size}")
-    logger.info(f"  Full image size: {full_image_size}x{full_image_size}")
-    logger.info(f"  Patch size: {args.patch_size}")
+    logger.info(f"Image configuration: {max_grid_size}x{max_grid_size} grid, {full_image_size}x{full_image_size} pixels, patch size {args.patch_size}")
     
     # Validate patch size
     if full_image_size % args.patch_size != 0:
@@ -830,9 +1016,9 @@ def main():
     train_loader, test_loader = get_data_loaders(
         batch_size=args.batch_size, 
         data_dir=args.data_dir,
-        balance_lengths=True,  # Enable balanced length distribution
         max_grid_size=max_grid_size,  # Pass max grid size parameter
-        max_output_length=args.max_output_length  # Use specified or default to grid capacity
+        max_output_length=args.max_output_length,  # Use specified or default to grid capacity
+        static_length=args.static_length
     )
     
     # Calculate max sequence length: max_output_length + start + finish tokens
@@ -840,10 +1026,7 @@ def main():
     effective_max_output_length = args.max_output_length if args.max_output_length is not None else (max_grid_size * max_grid_size)
     max_seq_len = effective_max_output_length + 2  # +2 for start and finish tokens
     
-    logger.info(f"Model configuration:")
-    logger.info(f"  Max output length: {effective_max_output_length} digits")
-    logger.info(f"  Max sequence length: {max_seq_len} tokens (including start/finish)")
-
+    logger.info(f"Model configuration: {effective_max_output_length} digits max, {max_seq_len} tokens max")
     
     # Create the Encoder-Decoder model with dynamic sizing
     model = EncoderDecoder(
@@ -851,8 +1034,8 @@ def main():
         patch_size=args.patch_size,
         encoder_embed_dim=128,
         decoder_embed_dim=128,
-        num_layers=16,
-        num_heads=16,
+        num_layers=8,
+        num_heads=8,
         dropout=0.1,
         max_seq_len=max_seq_len  # Pass calculated max sequence length
     )
@@ -871,7 +1054,7 @@ def main():
         learning_rate=args.lr,
         checkpoint_dir=args.checkpoint_dir,
         max_seq_len=max_seq_len,  # Pass the calculated max sequence length
-
+        max_grid_size=max_grid_size  # Pass the max_grid_size parameter
     )
     
     # Export model for inference

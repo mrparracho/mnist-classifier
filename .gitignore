@@ -46,6 +46,7 @@ model/data/
 data/
 checkpoints/
 logs/
+debug_images/
 
 # Database
 *.sqlite3
