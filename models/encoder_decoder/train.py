@@ -6,8 +6,16 @@ Training script for Encoder-Decoder MNIST model.
 import os
 import argparse
 import logging
+import warnings
 from pathlib import Path
 from datetime import datetime
+
+# Suppress urllib3 warnings (used by huggingface-hub)
+warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+
+# Fix multiprocessing issues on macOS
+if os.name == 'posix':
+    os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
 
 import torch
 import torch.nn as nn
@@ -32,6 +40,14 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Hugging Face integration
+try:
+    from huggingface_hub import HfApi, login
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    logger.warning("Hugging Face libraries not available. Install with: pip install huggingface-hub")
 
 def setup_logging(base_dir):
     """
@@ -217,10 +233,18 @@ def get_device():
     Returns:
         torch.device: The best available device
     """
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-        logger.info("Using MPS (Apple Silicon GPU) for training")
-    elif torch.cuda.is_available():
+    # Check for MPS (Apple Silicon) - available in PyTorch 1.12+
+    if hasattr(torch, 'backends') and hasattr(torch.backends, 'mps'):
+        try:
+            if torch.backends.mps.is_available():
+                device = torch.device("mps")
+                logger.info("Using MPS (Apple Silicon GPU) for training")
+                return device
+        except (AttributeError, RuntimeError):
+            pass
+    
+    # Fall back to CUDA or CPU
+    if torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info("Using CUDA GPU for training")
     else:
@@ -699,7 +723,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         max_grid_size (int): Maximum grid size for the model
         
     Returns:
-        model: Trained model
+        float: Best accuracy achieved during training
     """
     # Create checkpoint directory if it doesn't exist
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -813,7 +837,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         }, checkpoint_path)
     
     logger.info(f"Training completed. Best accuracy: {best_accuracy:.2f}%")
-    return model
+    return best_accuracy
 
 def collate_variable_length(batch):
     """
@@ -948,6 +972,129 @@ def save_mnist_image_for_debug(image_tensor, filename, target_digits, predicted_
     except Exception as e:
         logger.warning(f"Failed to save debug image: {e}")
 
+def save_model_to_huggingface(model, repo_name, token=None, commit_message="Add trained encoder-decoder MNIST model", 
+                             model_config=None):
+    """
+    Save the trained model to Hugging Face Hub.
+    
+    Args:
+        model: The trained PyTorch model
+        repo_name: Hugging Face repository name (e.g., 'username/model-name')
+        token: Hugging Face API token (optional if logged in)
+        commit_message: Commit message for the upload
+        model_config: Additional model configuration to save
+    """
+    if not HF_AVAILABLE:
+        logger.warning("Hugging Face libraries not available. Skipping HF upload.")
+        return False
+    
+    try:
+        # Login to Hugging Face if token provided
+        if token:
+            login(token=token)
+            logger.info("Logged in to Hugging Face Hub")
+        
+        # Create a temporary directory for model files
+        import tempfile
+        import json
+        import os
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save model state dict
+            model_path = os.path.join(temp_dir, "pytorch_model.bin")
+            torch.save(model.state_dict(), model_path)
+            
+            # Create model configuration
+            config = {
+                "model_type": "encoder_decoder_mnist",
+                "architecture": "Vision Transformer + Transformer Decoder",
+                "task": "sequence-to-sequence",
+                "dataset": "MNIST",
+                "max_seq_len": getattr(model, 'max_seq_len', 102),
+                "vocab_size": 13,  # 0-9 digits + start(10) + finish(11) + pad(12)
+                "pad_token_id": 12,
+                "start_token_id": 10,
+                "finish_token_id": 11,
+                "created_by": "encoder_decoder_mnist_trainer"
+            }
+            
+            # Add custom config if provided
+            if model_config:
+                config.update(model_config)
+            
+            # Save config
+            config_path = os.path.join(temp_dir, "config.json")
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            # Create README
+            readme_content = f"""# Encoder-Decoder MNIST Model
+
+This model was trained to recognize and transcribe sequences of MNIST digits arranged in a grid.
+
+## Model Architecture
+- **Encoder**: Vision Transformer for image processing
+- **Decoder**: Transformer decoder for sequence generation
+- **Task**: Sequence-to-sequence digit recognition
+
+## Usage
+```python
+import torch
+from models.encoder_decoder.model import EncoderDecoder
+
+# Load model
+model = EncoderDecoder.from_pretrained("{repo_name}")
+model.eval()
+
+# Process image and generate sequence
+with torch.no_grad():
+    sequence = model(image, max_length=50)
+```
+
+## Training Details
+- **Dataset**: MNIST
+- **Grid Size**: Variable (configurable)
+- **Sequence Length**: Variable (1 to grid capacity)
+- **Vocabulary**: 0-9 digits + special tokens
+
+## Model Configuration
+```json
+{json.dumps(config, indent=2)}
+```
+"""
+            
+            readme_path = os.path.join(temp_dir, "README.md")
+            with open(readme_path, 'w') as f:
+                f.write(readme_content)
+            
+            # Upload to Hugging Face Hub
+            api = HfApi()
+            
+            # Create repository if it doesn't exist
+            try:
+                api.create_repo(repo_name, exist_ok=True, private=False)
+                logger.info(f"Repository {repo_name} ready for upload")
+            except Exception as e:
+                logger.warning(f"Could not create repository {repo_name}: {e}")
+                return False
+            
+            # Upload files
+            api.upload_folder(
+                folder_path=temp_dir,
+                repo_id=repo_name,
+                commit_message=commit_message
+            )
+            
+            logger.info(f"✅ Model successfully uploaded to https://huggingface.co/{repo_name}")
+            logger.info(f"   Repository: https://huggingface.co/{repo_name}")
+            logger.info(f"   Model files: config.json, pytorch_model.bin, README.md")
+            
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to upload model to Hugging Face Hub: {e}")
+        return False
+
 def main():
     """Main function to train the Encoder-Decoder MNIST model."""
     # Set up logging first
@@ -986,14 +1133,14 @@ def main():
         args.checkpoint_dir = os.path.join(os.path.dirname(__file__), "checkpoints")
     
     # Get the best available device
-    if args.no_mps or not torch.backends.mps.is_available():
-        # Fall back to CUDA/CPU logic
+    if args.no_mps:
+        # Skip MPS, use CUDA or CPU
         use_cuda = not args.no_cuda and torch.cuda.is_available()
         device = torch.device("cuda" if use_cuda else "cpu")
+        logger.info(f"Using device: {device}")
     else:
+        # Use full device selection (MPS > CUDA > CPU)
         device = get_device()
-    
-    logger.info(f"Using device: {device}")
     
     # Set number of CPU threads for CPU training
     if device.type == "cpu":
@@ -1045,7 +1192,7 @@ def main():
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Train model
-    train_model(
+    best_accuracy = train_model(
         model=model,
         train_loader=train_loader,
         test_loader=test_loader,
@@ -1058,11 +1205,59 @@ def main():
     )
     
     # Export model for inference
-    export_path = os.path.join(args.checkpoint_dir, "encoder_decoder_mnist.pt")
+    # Create filename with grid size and length mode
+    length_mode = "fixlen" if args.static_length is not None else "varlen"
+    model_filename = f"encoder_decoder_mnist_{max_grid_size}_{length_mode}.pt"
+    export_path = os.path.join(args.checkpoint_dir, model_filename)
     torch.save(model.state_dict(), export_path)
     logger.info(f"Model exported for inference to {export_path}")
 
-    logger.info(f"MPS available: {torch.backends.mps.is_available()}")
+    # Upload to Hugging Face Hub if environment variables are set
+    hf_user = os.environ.get('HUGGING_FACE_USER')
+    hf_token = os.environ.get('HUGGING_FACE_TOKEN')
+    
+    if hf_user and hf_token:
+        logger.info("="*60)
+        logger.info("UPLOADING MODEL TO HUGGING FACE HUB")
+        logger.info("="*60)
+        
+        # Create repository name with grid size and length mode
+        length_mode = "fixlen" if args.static_length is not None else "varlen"
+        repo_name = f"{hf_user}/mnist-encoder-decoder-{max_grid_size}-{length_mode}"
+        
+        # Prepare model configuration
+        model_config = {
+            "max_grid_size": max_grid_size,
+            "patch_size": args.patch_size,
+            "encoder_embed_dim": 128,
+            "decoder_embed_dim": 128,
+            "num_layers": 8,
+            "num_heads": 8,
+            "dropout": 0.1,
+            "static_length": args.static_length,
+            "max_output_length": effective_max_output_length,
+            "training_epochs": args.epochs,
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "best_accuracy": best_accuracy
+        }
+        
+        success = save_model_to_huggingface(
+            model=model,
+            repo_name=repo_name,
+            token=hf_token,
+            commit_message="Add trained encoder-decoder MNIST model",
+            model_config=model_config
+        )
+        
+        if success:
+            logger.info("✅ Hugging Face upload completed successfully!")
+        else:
+            logger.warning("❌ Hugging Face upload failed. Check logs above for details.")
+    else:
+        logger.info("Hugging Face upload skipped (HUGGING_FACE_USER and/or HUGGING_FACE_TOKEN not set)")
+
+    # Log PyTorch version and MPS availability
     logger.info(f"PyTorch version: {torch.__version__}")
     
     # Log session completion
