@@ -15,4 +15,7 @@ passlib==1.7.4
 bcrypt==4.1.2
 tqdm==4.66.2
 # Hugging Face integration (optional)
-huggingface-hub>=0.16.0 
+huggingface-hub>=0.16.0
+transformers
+einops
+wandb 

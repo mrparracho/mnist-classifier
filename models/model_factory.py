@@ -8,7 +8,7 @@ from base.base_model import BaseModel
 from cnn_mnist.model import CNNMNISTClassifier
 from transformer1_mnist.model import Transformer1MNISTClassifier
 from transformer2_mnist.model import Transformer2MNISTClassifier
-from encoder_decoder.model import EncoderDecoderMNISTClassifier
+from encoder_decoder.universal_model_adapter import UniversalModelAdapter
 from config import get_model_config
 
 
@@ -22,7 +22,7 @@ class ModelFactory:
         "cnn_mnist": CNNMNISTClassifier,
         "transformer1_mnist": Transformer1MNISTClassifier,
         "transformer2_mnist": Transformer2MNISTClassifier,
-        "encoder_decoder": EncoderDecoderMNISTClassifier,
+        "encoder_decoder": UniversalModelAdapter,
     }
     
     @classmethod
@@ -134,27 +134,23 @@ class ModelFactory:
     @classmethod
     def create_encoder_decoder_model(cls, grid_size: int) -> BaseModel:
         """
-        Create an encoder-decoder model instance for a specific grid size.
+        Create a universal encoder-decoder model instance that works with any grid size.
         
         Args:
-            grid_size: Size of the grid (1-4)
+            grid_size: Size of the grid (1-10 supported by universal model)
             
         Returns:
-            BaseModel: Model instance with grid-specific checkpoint
+            BaseModel: Universal model instance that can handle any grid size
             
         Raises:
-            ValueError: If grid size is not supported
+            ValueError: If encoder-decoder model is not registered
         """
         if "encoder_decoder" not in cls._models:
             raise ValueError("Encoder-decoder model not registered")
         
-        # Get grid-specific checkpoint path
-        from config import ModelRegistry
-        checkpoint_path = ModelRegistry.get_encoder_decoder_checkpoint_path(grid_size)
-        
-        # Create model instance with specific checkpoint
+        # Use the universal model adapter for all grid sizes
         model_class = cls._models["encoder_decoder"]
-        return model_class(checkpoint_path=checkpoint_path)
+        return model_class(checkpoint_path="encoder_decoder/other/multi-digit-scrambled-best.pt")
 
 
 # Convenience functions
@@ -174,13 +170,13 @@ def get_model(model_name: str, checkpoint_path: Optional[str] = None) -> BaseMod
 
 def get_encoder_decoder_model(grid_size: int) -> BaseModel:
     """
-    Get an encoder-decoder model instance for a specific grid size.
+    Get a universal encoder-decoder model instance that works with any grid size.
     
     Args:
-        grid_size: Size of the grid (1-4)
+        grid_size: Size of the grid (1-10 supported by universal model)
         
     Returns:
-        BaseModel: Model instance with grid-specific checkpoint
+        BaseModel: Universal model instance that can handle any grid size
     """
     return ModelFactory.create_encoder_decoder_model(grid_size)
 

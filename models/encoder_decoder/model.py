@@ -483,10 +483,10 @@ class EncoderDecoderMNISTClassifier(BaseModel):
             'grid_size': grid_size,
             'image_size': grid_size * 28,  # e.g., 2*28=56 for 2x2 grid
             'max_seq_len': (grid_size * grid_size) + 2,  # +2 for start/finish tokens
-            'patch_size': 14,  # From training logs: --patch-size: 14
-            'encoder_embed_dim': 128,  # From training code: hardcoded value
-            'decoder_embed_dim': 128,  # From training code: hardcoded value
-            'num_layers': 8,  # From training code: hardcoded value
+            'patch_size': 7,  # From training logs: --patch-size: 14
+            'encoder_embed_dim': 64,  # From training code: hardcoded value
+            'decoder_embed_dim': 64,  # From training code: hardcoded value
+            'num_layers': 4,  # From training code: hardcoded value
             'num_heads': 8,  # From training code: hardcoded value
             'dropout': 0.1,  # From training code: hardcoded value
             'normalize_mean': 0.1307,  # MNIST standard

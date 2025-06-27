@@ -72,14 +72,14 @@ class SequenceFeedbackRequest(BaseModel):
 @router.post("/predict-sequence", response_model=SequencePredictionResponse)
 async def predict_sequence(
     file: UploadFile = File(...),
-    grid_size: int = Query(..., ge=1, le=4, description="Grid size (1-4)")
+    grid_size: int = Query(..., ge=1, le=10, description="Grid size (1-10)")
 ):
     """
-    Predict a sequence of digits using the encoder-decoder model.
+    Predict a sequence of digits using the universal encoder-decoder model.
     
     Args:
         file: Image file containing a handwritten digit
-        grid_size: Size of the grid (1-4)
+        grid_size: Size of the grid (1-10 supported by universal model)
         
     Returns:
         SequencePredictionResponse: Model's prediction and confidence
