@@ -12,6 +12,8 @@ from datetime import datetime
 
 # Suppress urllib3 warnings (used by huggingface-hub)
 warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
+warnings.filterwarnings("ignore", category=Warning, module="urllib3")
+warnings.filterwarnings("ignore", message=".*urllib3.*")
 
 # Fix multiprocessing issues on macOS
 if os.name == 'posix':
@@ -144,10 +146,8 @@ class MNISTSequenceDataset(Dataset):
             self.static_length = None
         
     def __len__(self):
-        # Allow image reuse across samples - this dramatically increases dataset size
-        # For a 3x3 grid, we can create many more samples by reusing images
-        # Use a large multiplier to create sufficient training samples
-        return len(self.mnist_dataset) * 10  # 10x more samples by reusing images
+        # Return actual dataset size without artificial multiplication
+        return len(self.mnist_dataset)
     
     def __getitem__(self, idx):
         # STATIC LENGTH: Use fixed length if specified, otherwise sample randomly
@@ -159,13 +159,14 @@ class MNISTSequenceDataset(Dataset):
             # sampled_index is 0-based, maps to lengths 1 to max_output_length
             num_digits = sampled_index + 1  # This gives us lengths 1 to max_output_length
         
-        # Get actual MNIST digits and their labels - allow reuse across samples
+        # Get actual MNIST digits and their labels - use sequential sampling without reuse
         digit_images = []
         digit_labels = []
         
-        # Use modulo to allow image reuse - this creates much more training data
+        # Sample digits sequentially from the dataset without artificial reuse
         for i in range(num_digits):
-            data_idx = (idx + i * 1000) % len(self.mnist_dataset)  # Spread out image selection
+            # Use sequential sampling with wrap-around if needed
+            data_idx = (idx + i) % len(self.mnist_dataset)
             image, label = self.mnist_dataset[data_idx]
             digit_images.append(image)
             digit_labels.append(label)
@@ -328,7 +329,7 @@ def get_data_loaders(batch_size=64, data_dir=None, max_grid_size=10,
     
     # Log dataset sizes
     logger.info(f"Dataset sizes: {len(train_sequence_dataset)} train samples, {len(test_sequence_dataset)} test samples")
-    logger.info(f"  (with image reuse: {len(train_sequence_dataset) // len(train_dataset)}x more samples)")
+    logger.info(f"  (using actual MNIST dataset size without artificial multiplication)")
     
     # Create data loaders with length-based batching for optimal efficiency
     train_batch_sampler = LengthBasedBatchSampler(
@@ -706,7 +707,7 @@ def count_digit_length(seq, seq_length):
     return length
 
 def train_model(model, train_loader, test_loader, device, epochs=10, learning_rate=0.001, 
-                checkpoint_dir="./checkpoints", length_loss_weight=0.5, max_seq_len=102, max_grid_size=10):
+                checkpoint_dir="./checkpoints", length_loss_weight=0.5, max_seq_len=102, max_grid_size=10, length_mode="varlen"):
     """
     Train the Encoder-Decoder MNIST model.
     
@@ -721,6 +722,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         length_loss_weight (float): Weight for the length prediction loss
         max_seq_len (int): Maximum sequence length supported by the model
         max_grid_size (int): Maximum grid size for the model
+        length_mode (str): Length mode ("fixlen" or "varlen") for consistent naming
         
     Returns:
         float: Best accuracy achieved during training
@@ -818,7 +820,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
         # Save model if it's the best so far
         if accuracy > best_accuracy:
             best_accuracy = accuracy
-            checkpoint_path = os.path.join(checkpoint_dir, "encoder_decoder_mnist.pt")
+            checkpoint_path = os.path.join(checkpoint_dir, f"mnist-encoder-decoder-{max_grid_size}-{length_mode}.pt")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -828,7 +830,7 @@ def train_model(model, train_loader, test_loader, device, epochs=10, learning_ra
             logger.info(f"New best model saved with accuracy: {accuracy:.2f}%")
         
         # Save checkpoint for every epoch
-        checkpoint_path = os.path.join(checkpoint_dir, f"encoder_decoder_mnist_epoch_{epoch+1}.pt")
+        checkpoint_path = os.path.join(checkpoint_dir, f"mnist-encoder-decoder-{max_grid_size}-{length_mode}_epoch_{epoch+1}.pt")
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
@@ -1030,38 +1032,38 @@ def save_model_to_huggingface(model, repo_name, token=None, commit_message="Add 
             # Create README
             readme_content = f"""# Encoder-Decoder MNIST Model
 
-This model was trained to recognize and transcribe sequences of MNIST digits arranged in a grid.
+            This model was trained to recognize and transcribe sequences of MNIST digits arranged in a grid.
 
-## Model Architecture
-- **Encoder**: Vision Transformer for image processing
-- **Decoder**: Transformer decoder for sequence generation
-- **Task**: Sequence-to-sequence digit recognition
+            ## Model Architecture
+            - **Encoder**: Vision Transformer for image processing
+            - **Decoder**: Transformer decoder for sequence generation
+            - **Task**: Sequence-to-sequence digit recognition
 
-## Usage
-```python
-import torch
-from models.encoder_decoder.model import EncoderDecoder
+            ## Usage
+            ```python
+            import torch
+            from models.encoder_decoder.model import EncoderDecoder
 
-# Load model
-model = EncoderDecoder.from_pretrained("{repo_name}")
-model.eval()
+            # Load model
+            model = EncoderDecoder.from_pretrained("{repo_name}")
+            model.eval()
 
-# Process image and generate sequence
-with torch.no_grad():
-    sequence = model(image, max_length=50)
-```
+            # Process image and generate sequence
+            with torch.no_grad():
+                sequence = model(image, max_length=50)
+            ```
 
-## Training Details
-- **Dataset**: MNIST
-- **Grid Size**: Variable (configurable)
-- **Sequence Length**: Variable (1 to grid capacity)
-- **Vocabulary**: 0-9 digits + special tokens
+            ## Training Details
+            - **Dataset**: MNIST
+            - **Grid Size**: Variable (configurable)
+            - **Sequence Length**: Variable (1 to grid capacity)
+            - **Vocabulary**: 0-9 digits + special tokens
 
-## Model Configuration
-```json
-{json.dumps(config, indent=2)}
-```
-"""
+            ## Model Configuration
+            ```json
+            {json.dumps(config, indent=2)}
+            ```
+            """
             
             readme_path = os.path.join(temp_dir, "README.md")
             with open(readme_path, 'w') as f:
@@ -1110,7 +1112,7 @@ def main():
     parser.add_argument("--no-cuda", action="store_true", default=False, help="Disable CUDA training")
     parser.add_argument("--no-mps", action="store_true", default=False, help="Disable MPS training")
     parser.add_argument("--max-grid-size", type=int, default=10, help="Maximum grid size (e.g., 10 for 10x10 grid)")
-    parser.add_argument("--patch-size", type=int, default=14, help="Patch size for vision transformer")
+    parser.add_argument("--patch-size", type=int, default=7, help="Patch size for vision transformer")
     parser.add_argument("--max-output-length", type=int, default=None, help="Maximum output sequence length (None = grid capacity)")
     parser.add_argument("--static-length", type=int, default=None, help="If specified, force all sequences to have exactly this many digits")
     args = parser.parse_args()
@@ -1179,9 +1181,9 @@ def main():
     model = EncoderDecoder(
         image_size=full_image_size,  # Full grid image size
         patch_size=args.patch_size,
-        encoder_embed_dim=128,
-        decoder_embed_dim=128,
-        num_layers=8,
+        encoder_embed_dim=64,
+        decoder_embed_dim=64,
+        num_layers=4,
         num_heads=8,
         dropout=0.1,
         max_seq_len=max_seq_len  # Pass calculated max sequence length
@@ -1190,6 +1192,9 @@ def main():
     
     logger.info(f"Training Encoder-Decoder MNIST model for {args.epochs} epochs")
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Determine length mode for consistent naming
+    length_mode = "fixlen" if args.static_length is not None else "varlen"
     
     # Train model
     best_accuracy = train_model(
@@ -1201,13 +1206,13 @@ def main():
         learning_rate=args.lr,
         checkpoint_dir=args.checkpoint_dir,
         max_seq_len=max_seq_len,  # Pass the calculated max sequence length
-        max_grid_size=max_grid_size  # Pass the max_grid_size parameter
+        max_grid_size=max_grid_size,  # Pass the max_grid_size parameter
+        length_mode=length_mode
     )
     
     # Export model for inference
-    # Create filename with grid size and length mode
-    length_mode = "fixlen" if args.static_length is not None else "varlen"
-    model_filename = f"encoder_decoder_mnist_{max_grid_size}_{length_mode}.pt"
+    # Create filename with grid size and length mode - use same convention as Hugging Face
+    model_filename = f"mnist-encoder-decoder-{max_grid_size}-{length_mode}.pt"
     export_path = os.path.join(args.checkpoint_dir, model_filename)
     torch.save(model.state_dict(), export_path)
     logger.info(f"Model exported for inference to {export_path}")
@@ -1222,16 +1227,15 @@ def main():
         logger.info("="*60)
         
         # Create repository name with grid size and length mode
-        length_mode = "fixlen" if args.static_length is not None else "varlen"
         repo_name = f"{hf_user}/mnist-encoder-decoder-{max_grid_size}-{length_mode}"
         
         # Prepare model configuration
         model_config = {
             "max_grid_size": max_grid_size,
             "patch_size": args.patch_size,
-            "encoder_embed_dim": 128,
-            "decoder_embed_dim": 128,
-            "num_layers": 8,
+            "encoder_embed_dim": 64,
+            "decoder_embed_dim": 64,
+            "num_layers": 4,
             "num_heads": 8,
             "dropout": 0.1,
             "static_length": args.static_length,
@@ -1251,9 +1255,9 @@ def main():
         )
         
         if success:
-            logger.info("✅ Hugging Face upload completed successfully!")
+            logger.info("Hugging Face upload completed successfully!")
         else:
-            logger.warning("❌ Hugging Face upload failed. Check logs above for details.")
+            logger.warning("Hugging Face upload failed. Check logs above for details.")
     else:
         logger.info("Hugging Face upload skipped (HUGGING_FACE_USER and/or HUGGING_FACE_TOKEN not set)")
 

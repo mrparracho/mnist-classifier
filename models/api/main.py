@@ -60,6 +60,10 @@ async def startup_event():
 app.include_router(predictions.router, prefix="/api/v1", tags=["predictions"])
 app.include_router(models.router, prefix="/api/v1", tags=["models"])
 
+# Import and include sequence predictions router
+from api.routers import sequence_predictions
+app.include_router(sequence_predictions.router, prefix="/api/v1", tags=["sequence-predictions"])
+
 # Define Pydantic models for request/response
 class PredictionResponse(BaseModel):
     prediction: int

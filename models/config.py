@@ -77,7 +77,31 @@ class ModelRegistry:
                 "normalize_mean": 0.1307,
                 "normalize_std": 0.3081
             }
-        )
+        ),
+        "encoder_decoder": ModelConfig(
+            name="encoder_decoder",
+            display_name="Encoder-Decoder",
+            description="Encoder-Decoder model for sequence MNIST digit prediction",
+            model_type="encoder_decoder",
+            version="1.0.0",
+            checkpoint_path=os.getenv("ENCODER_DECODER_CHECKPOINT_PATH", "encoder_decoder/checkpoints/encoder_decoder.pt"),
+            config={
+                "patch_size": 7,
+                "encoder_embed_dim": 64,
+                "decoder_embed_dim": 64,
+                "num_layers": 4,
+                "num_heads": 8,
+                "dropout": 0.1,
+                "normalize_mean": 0.1307,
+                "normalize_std": 0.3081,
+                "grid_checkpoints": {
+                    1: "encoder_decoder/checkpoints/mnist-encoder-decoder-1-varlen.pt",
+                    2: "encoder_decoder/checkpoints/mnist-encoder-decoder-2-varlen.pt",
+                    3: "encoder_decoder/checkpoints/mnist-encoder-decoder-3-varlen.pt",
+                    4: "encoder_decoder/checkpoints/mnist-encoder-decoder-4-varlen.pt"
+                }
+            }
+        ),
     }
     
     @classmethod
@@ -179,6 +203,28 @@ class ModelRegistry:
                 setattr(model_config, key, value)
             else:
                 raise ValueError(f"Invalid configuration key: {key}")
+
+    @classmethod
+    def get_encoder_decoder_checkpoint_path(cls, grid_size: int) -> str:
+        """
+        Get the checkpoint path for encoder-decoder model based on grid size.
+        
+        Args:
+            grid_size: Size of the grid (1-4)
+            
+        Returns:
+            str: Checkpoint path for the specific grid size
+        """
+        config = cls.get_model_config("encoder_decoder")
+        if config.config is None:
+            raise ValueError("Encoder-decoder model config is not properly configured")
+        
+        grid_checkpoints = config.config.get("grid_checkpoints", {})
+        
+        if grid_size not in grid_checkpoints:
+            raise ValueError(f"Grid size {grid_size} not supported. Available: {list(grid_checkpoints.keys())}")
+        
+        return grid_checkpoints[grid_size]
 
 
 # Convenience functions

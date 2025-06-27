@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Original MNIST Classifier App
   app:
     build:
       context: ../app
@@ -22,6 +23,29 @@ services:
       - model-service
       - db
     command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+  # Sequence Prediction App
+  app-sequence:
+    build:
+      context: ../app_sequence
+      dockerfile: Dockerfile
+    container_name: mnist-app-sequence
+    ports:
+      - "8502:8502"
+    environment:
+      - MODEL_API_URL=http://model-service:8000
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=mnist
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DEBUG=True
+    volumes:
+      - ../app_sequence:/app
+    depends_on:
+      - model-service
+      - db
+    command: streamlit run app.py --server.port 8502 --server.address 0.0.0.0
 
   model-service:
     build:
@@ -60,6 +84,7 @@ services:
       - POSTGRES_PASSWORD=postgres
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d/migrations:ro
 
   pgadmin:
     image: dpage/pgadmin4

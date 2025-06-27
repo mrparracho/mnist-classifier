@@ -11,9 +11,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self, max_retries: int = 5, retry_delay: int = 2):
+    def __init__(self, max_retries: int = 5, retry_delay: int = 2, schema: str = "mnist_sequence"):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.schema = schema  # Use mnist_sequence schema for sequence prediction app
         self.conn = None
         
     def get_connection(self):
@@ -34,9 +35,10 @@ class Database:
                     user=os.getenv("DB_USER", "postgres"),
                     password=os.getenv("DB_PASSWORD", "postgres"),
                     host=host,
-                    port=os.getenv("DB_PORT", "5432")
+                    port=os.getenv("DB_PORT", "5432"),
+                    options=f"-c search_path={self.schema},public"  # Set schema search path
                 )
-                logger.info(f"Connected to database at {host}")
+                logger.info(f"Connected to database at {host} using schema {self.schema}")
                 return self.conn
             except psycopg2.Error as e:
                 logger.warning(f"Failed to connect to {host}: {e}")
@@ -215,6 +217,166 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting prediction history: {e}")
             raise
+
+    def store_sequence_prediction(self, image_data: bytes, predicted_sequence: List[int], 
+                                confidence: float, grid_size: int, session_id: str = None) -> str:
+        """
+        Store a sequence prediction in the database.
+        
+        Args:
+            image_data: Image data as bytes
+            predicted_sequence: List of predicted digits
+            confidence: Prediction confidence
+            grid_size: Size of the grid
+            session_id: Optional session ID
+            
+        Returns:
+            str: Prediction ID
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO sequence_predictions 
+                        (image_data, predicted_sequence, confidence, grid_size, model_name, session_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (image_data, predicted_sequence, confidence, grid_size, 'encoder_decoder', session_id))
+                    
+                    prediction_id = cursor.fetchone()[0]
+                    conn.commit()
+                    return str(prediction_id)
+                    
+        except Exception as e:
+            logger.error(f"Error storing sequence prediction: {e}")
+            raise
+
+    def update_sequence_prediction_feedback(self, prediction_id: str, true_sequence: List[int], 
+                                          grid_size: int) -> Tuple[Dict, bool, Optional[str]]:
+        """
+        Update a sequence prediction with feedback.
+        
+        Args:
+            prediction_id: ID of the prediction
+            true_sequence: List of true digits
+            grid_size: Size of the grid
+            
+        Returns:
+            Tuple of (prediction_data, is_correct, session_id)
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get the original prediction
+                    cursor.execute("""
+                        SELECT predicted_sequence, session_id
+                        FROM sequence_predictions
+                        WHERE id = %s
+                    """, (prediction_id,))
+                    
+                    result = cursor.fetchone()
+                    if not result:
+                        raise ValueError(f"Prediction with ID {prediction_id} not found")
+                    
+                    predicted_sequence, session_id = result
+                    
+                    # Check if prediction is correct
+                    is_correct = predicted_sequence == true_sequence
+                    
+                    # Update the prediction with feedback
+                    cursor.execute("""
+                        UPDATE sequence_predictions
+                        SET true_sequence = %s, is_correct = %s
+                        WHERE id = %s
+                    """, (true_sequence, is_correct, prediction_id))
+                    
+                    conn.commit()
+                    
+                    return {
+                        'predicted_sequence': predicted_sequence,
+                        'true_sequence': true_sequence,
+                        'is_correct': is_correct
+                    }, is_correct, session_id
+                    
+        except Exception as e:
+            logger.error(f"Error updating sequence prediction feedback: {e}")
+            raise
+
+    def get_sequence_prediction_history(self, limit: int = 10) -> List[Dict]:
+        """
+        Get sequence prediction history.
+        
+        Args:
+            limit: Maximum number of predictions to return
+            
+        Returns:
+            List of prediction history items
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    cursor.execute("""
+                        SELECT timestamp, predicted_sequence, true_sequence, confidence, grid_size
+                        FROM sequence_predictions
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    """, (limit,))
+                    
+                    rows = cursor.fetchall()
+                    return [
+                        {
+                            'timestamp': row[0],
+                            'predicted_sequence': row[1],
+                            'true_sequence': row[2],
+                            'confidence': row[3],
+                            'grid_size': row[4]
+                        }
+                        for row in rows
+                    ]
+                    
+        except Exception as e:
+            logger.error(f"Error getting sequence prediction history: {e}")
+            return []
+
+    def get_sequence_model_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics for the encoder-decoder model.
+        
+        Returns:
+            Dict containing model statistics
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    cursor.execute("""
+                        SELECT 
+                            COUNT(*) as total_predictions,
+                            COUNT(CASE WHEN is_correct = true THEN 1 END) as correct_predictions,
+                            AVG(confidence) as avg_confidence
+                        FROM sequence_predictions
+                        WHERE model_name = 'encoder_decoder'
+                    """)
+                    
+                    result = cursor.fetchone()
+                    total_predictions, correct_predictions, avg_confidence = result
+                    
+                    accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+                    
+                    return {
+                        'total_predictions': total_predictions,
+                        'correct_predictions': correct_predictions,
+                        'accuracy': accuracy,
+                        'avg_confidence': float(avg_confidence) if avg_confidence else 0.0
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error getting sequence model stats: {e}")
+            return {
+                'total_predictions': 0,
+                'correct_predictions': 0,
+                'accuracy': 0.0,
+                'avg_confidence': 0.0
+            }
 
 # Global database instance
 db = Database() 

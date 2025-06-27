@@ -24,7 +24,7 @@ test:
 	pytest tests/
 
 deploy:
-	docker-compose -f infrastructure/docker-compose.yml up --build -d
+	docker-compose -f infrastructure/docker-compose.yml up --build
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -r {} +

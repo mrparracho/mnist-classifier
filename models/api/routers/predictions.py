@@ -15,7 +15,10 @@ from pydantic import BaseModel
 
 from api.utils import preprocess_image
 from api.models import PredictionResponse, FeedbackRequest, ModelStats
-from api.db import db
+from api.db import Database
+
+# Create database instance with mnist_classifier schema for original app
+db = Database(schema="mnist_classifier")
 
 router = APIRouter()
 

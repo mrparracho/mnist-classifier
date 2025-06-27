@@ -15,7 +15,8 @@ async def init_db():
             password=os.getenv("DB_PASSWORD", "postgres"),
             database=os.getenv("DB_NAME", "mnist"),
             host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432")
+            port=os.getenv("DB_PORT", "5432"),
+            server_settings={'search_path': 'mnist_classifier,public'}  # Use mnist_classifier schema for original app
         )
 
 async def store_prediction(prediction_id: str, image_data: bytes, prediction: int, confidence: float, model_name: str = "cnn_mnist"):
@@ -97,19 +98,16 @@ async def get_available_models() -> List[Dict[str, Any]]:
     """Get list of available models from database."""
     async with pool.acquire() as conn:
         models = await conn.fetch("""
-            SELECT name, display_name, description, model_type, version, is_active
-            FROM models
-            WHERE is_active = TRUE
-            ORDER BY name
+            SELECT * FROM mnist_classifier.get_available_models()
         """)
         return [dict(model) for model in models]
 
 async def get_model_statistics(model_name: str) -> Dict[str, Any]:
     """Get statistics for a specific model."""
     async with pool.acquire() as conn:
-        # Get model performance using the database function
+        # Get model performance using the database function with schema prefix
         stats = await conn.fetchrow("""
-            SELECT * FROM get_model_statistics($1)
+            SELECT * FROM mnist_classifier.get_model_statistics($1)
         """, model_name)
         
         if stats:
@@ -138,7 +136,7 @@ async def get_all_model_statistics() -> List[Dict[str, Any]]:
     """Get statistics for all models."""
     async with pool.acquire() as conn:
         stats = await conn.fetch("""
-            SELECT * FROM get_model_statistics()
+            SELECT * FROM mnist_classifier.get_model_statistics()
         """)
         import json
         result = []

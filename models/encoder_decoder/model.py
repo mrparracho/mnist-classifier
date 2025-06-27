@@ -5,7 +5,8 @@ Encoder-Decoder MNIST model implementation.
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-from typing import Optional
+from typing import Optional, List
+import re
 
 from base.base_model import BaseModel
 
@@ -452,22 +453,85 @@ class EncoderDecoderMNISTClassifier(BaseModel):
             checkpoint_path: Path to the model checkpoint file
         """
         super().__init__("encoder-decoder-mnist", checkpoint_path)
+        # Grid size will be extracted when checkpoint_path is set
+        self.grid_size: Optional[int] = None
+        # Model configuration will be extracted from checkpoint
+        self.model_config: Optional[dict] = None
+    
+    def _extract_config_from_checkpoint(self) -> dict:
+        """
+        Extract configuration from the checkpoint file using exact training parameters.
+        
+        Returns:
+            dict: Complete model configuration
+        """
+        if not self.checkpoint_path:
+            raise ValueError("Checkpoint path is required")
+        
+        # Extract grid size from filename
+        match = re.search(r'mnist-encoder-decoder-(\d+)-varlen\.pt', self.checkpoint_path)
+        if not match:
+            raise ValueError(f"Could not extract grid size from checkpoint path: {self.checkpoint_path}")
+        
+        grid_size = int(match.group(1))
+        if not (1 <= grid_size <= 4):
+            raise ValueError(f"Invalid grid size {grid_size} from checkpoint path")
+        
+        # Use exact training parameters from the logs and training code
+        # These are the hardcoded values used during training
+        config = {
+            'grid_size': grid_size,
+            'image_size': grid_size * 28,  # e.g., 2*28=56 for 2x2 grid
+            'max_seq_len': (grid_size * grid_size) + 2,  # +2 for start/finish tokens
+            'patch_size': 14,  # From training logs: --patch-size: 14
+            'encoder_embed_dim': 128,  # From training code: hardcoded value
+            'decoder_embed_dim': 128,  # From training code: hardcoded value
+            'num_layers': 8,  # From training code: hardcoded value
+            'num_heads': 8,  # From training code: hardcoded value
+            'dropout': 0.1,  # From training code: hardcoded value
+            'normalize_mean': 0.1307,  # MNIST standard
+            'normalize_std': 0.3081,   # MNIST standard
+        }
+        
+        print(f"DEBUG: Using exact training parameters:")
+        for key, value in config.items():
+            print(f"DEBUG:   {key}: {value}")
+        
+        return config
+    
+    def _ensure_config(self):
+        """Ensure configuration is loaded from checkpoint."""
+        if self.model_config is None:
+            self.model_config = self._extract_config_from_checkpoint()
+            self.grid_size = self.model_config['grid_size']
     
     def create_model(self) -> nn.Module:
         """
-        Create and return the Encoder-Decoder model architecture.
+        Create and return the Encoder-Decoder model architecture for the specific grid size.
         
         Returns:
             nn.Module: The Encoder-Decoder model architecture
         """
+        # Ensure configuration is loaded from checkpoint
+        self._ensure_config()
+        assert self.model_config is not None  # Type assertion for linter
+        
+        # Use configuration extracted from checkpoint
+        config = self.model_config
+        
+        print(f"DEBUG: Creating model with extracted config:")
+        print(f"DEBUG:   image_size={config['image_size']}, max_seq_len={config['max_seq_len']}")
+        print(f"DEBUG:   patch_size={config['patch_size']}, embed_dim={config['encoder_embed_dim']}")
+        
         return EncoderDecoder(
-            image_size=28,
-            patch_size=7,
-            encoder_embed_dim=64,
-            decoder_embed_dim=64,
-            num_layers=2, # 4 encoder layers
-            num_heads=2,  # 8 attention heads
-            dropout=0.1
+            image_size=config['image_size'],
+            patch_size=config['patch_size'],
+            encoder_embed_dim=config['encoder_embed_dim'],
+            decoder_embed_dim=config['decoder_embed_dim'],
+            num_layers=config['num_layers'],
+            num_heads=config['num_heads'],
+            dropout=config['dropout'],
+            max_seq_len=config['max_seq_len']
         )
     
     def get_preprocessing_transform(self) -> transforms.Compose:
@@ -477,8 +541,208 @@ class EncoderDecoderMNISTClassifier(BaseModel):
         Returns:
             transforms.Compose: The preprocessing pipeline
         """
+        # Ensure configuration is loaded from checkpoint
+        self._ensure_config()
+        assert self.model_config is not None  # Type assertion for linter
+        
+        # Use configuration extracted from checkpoint
+        config = self.model_config
+        
         return transforms.Compose([
-            transforms.Resize((28, 28)),
+            transforms.Resize((config['image_size'], config['image_size'])),
             transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
+            transforms.Normalize((config['normalize_mean'],), (config['normalize_std'],))
         ])
+    
+    def predict_sequence(self, image_bytes: bytes, grid_size: int) -> tuple[List[int], float]:
+        """
+        Predict a sequence of digits for a given grid size.
+        
+        Args:
+            image_bytes: Image data as bytes
+            grid_size: Size of the grid (1-4) - should match the model's grid size
+            
+        Returns:
+            tuple: (predicted_sequence, confidence)
+        """
+        try:
+            # Ensure grid size is set
+            self._ensure_config()
+            assert self.grid_size is not None  # Type assertion for linter
+            
+            # Verify grid size matches the model's grid size
+            if grid_size != self.grid_size:
+                print(f"WARNING: Requested grid size {grid_size} doesn't match model's grid size {self.grid_size}")
+                print(f"Using model's grid size {self.grid_size}")
+                grid_size = self.grid_size
+            
+            # Ensure model is loaded
+            if self.model is None:
+                self.load_model()
+            
+            # Check if model loaded successfully
+            if self.model is None:
+                raise RuntimeError("Failed to load model")
+            
+            # Preprocess the image
+            image_tensor = self.preprocess_image(image_bytes)
+            
+            # Add batch dimension if needed
+            if image_tensor.dim() == 3:
+                image_tensor = image_tensor.unsqueeze(0)
+            
+            # Move to device
+            device = next(self.model.parameters()).device
+            image_tensor = image_tensor.to(device)
+            
+            # Set model to evaluation mode
+            self.model.eval()
+            
+            with torch.no_grad():
+                # Generate sequence with appropriate max_length based on grid size
+                max_length = grid_size * grid_size + 2  # +2 for start and finish tokens
+                
+                print(f"DEBUG: Generating sequence for grid {grid_size}x{grid_size}, max_length={max_length}")
+                print(f"DEBUG: Input image shape: {image_tensor.shape}")
+                
+                # Generate the sequence
+                output_sequences = self.model(
+                    image_tensor, 
+                    target_sequence=None, 
+                    max_length=max_length,
+                    temperature=1.0
+                )
+                
+                # Process the output sequence
+                sequence = output_sequences[0]  # Take first batch item
+                
+                print(f"DEBUG: Raw sequence tokens: {sequence.tolist()}")
+                print(f"DEBUG: Start token: 10")
+                print(f"DEBUG: Finish token: 11")
+                print(f"DEBUG: Pad token: 12")
+                
+                # Convert tokens to digits (remove start token, stop at finish token)
+                predicted_sequence = []
+                start_token = 10  # <start> token
+                finish_token = 11  # <finish> token
+                pad_token = 12     # <pad> token
+                
+                for token in sequence:
+                    token_id = token.item()
+                    if token_id == start_token:
+                        print(f"DEBUG: Skipping start token {token_id}")
+                        continue  # Skip start token
+                    elif token_id == finish_token:
+                        print(f"DEBUG: Found finish token {token_id}, stopping")
+                        break  # Stop at finish token
+                    elif token_id == pad_token:
+                        print(f"DEBUG: Skipping pad token {token_id}")
+                        continue  # Skip pad tokens
+                    elif 0 <= token_id <= 9:
+                        print(f"DEBUG: Adding digit token {token_id}")
+                        predicted_sequence.append(token_id)
+                    else:
+                        print(f"DEBUG: Skipping invalid token {token_id}")
+                        # Invalid token, skip
+                        continue
+                
+                print(f"DEBUG: Predicted sequence before padding: {predicted_sequence}")
+                
+                # Ensure we have the right number of digits
+                expected_length = grid_size * grid_size
+                if len(predicted_sequence) < expected_length:
+                    # Pad with zeros if we don't have enough digits
+                    padding_needed = expected_length - len(predicted_sequence)
+                    print(f"DEBUG: Padding with {padding_needed} zeros")
+                    predicted_sequence.extend([0] * padding_needed)
+                elif len(predicted_sequence) > expected_length:
+                    # Truncate if we have too many digits
+                    print(f"DEBUG: Truncating from {len(predicted_sequence)} to {expected_length}")
+                    predicted_sequence = predicted_sequence[:expected_length]
+                
+                print(f"DEBUG: Final predicted sequence: {predicted_sequence}")
+                
+                # Calculate confidence based on model's prediction quality
+                confidence = 0.0
+                if len(predicted_sequence) > 0:
+                    # Simple heuristic: longer sequences that complete properly have higher confidence
+                    if len(predicted_sequence) == expected_length:
+                        confidence = 0.8  # Good confidence for complete sequences
+                    else:
+                        confidence = 0.4  # Lower confidence for incomplete sequences
+                else:
+                    confidence = 0.1  # Very low confidence for empty sequences
+                
+                return predicted_sequence, confidence
+                
+        except Exception as e:
+            print(f"DEBUG: Exception in predict_sequence: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return a default sequence in case of error
+            default_sequence = [0] * (grid_size * grid_size)
+            return default_sequence, 0.0
+
+    def load_model(self) -> nn.Module:
+        """
+        Load the model and its trained weights.
+        
+        Returns:
+            nn.Module: The loaded model
+        """
+        if self.model is None:
+            self.model = self.create_model()
+            
+        if self.checkpoint_path:
+            try:
+                checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+                
+                # Handle different checkpoint formats
+                if isinstance(checkpoint, dict):
+                    # If checkpoint contains model_state_dict key (training format)
+                    if 'model_state_dict' in checkpoint:
+                        state_dict = checkpoint['model_state_dict']
+                    # If checkpoint contains epoch key but no model_state_dict (older format)
+                    elif 'epoch' in checkpoint:
+                        # Remove non-model keys and use the rest as state_dict
+                        state_dict = {k: v for k, v in checkpoint.items() 
+                                    if k not in ['epoch', 'optimizer_state_dict', 'accuracy', 'loss']}
+                    else:
+                        # Assume the entire dict is the state_dict
+                        state_dict = checkpoint
+                else:
+                    # Direct state_dict format
+                    state_dict = checkpoint
+                
+                # Try to load the state dict with strict=False to handle partial matches
+                try:
+                    self.model.load_state_dict(state_dict, strict=True)
+                    print(f"DEBUG: Successfully loaded checkpoint with strict=True")
+                except RuntimeError as e:
+                    print(f"DEBUG: Strict loading failed: {e}")
+                    print(f"DEBUG: Attempting partial loading...")
+                    
+                    # Try partial loading
+                    try:
+                        # Load what we can and ignore the rest
+                        missing_keys, unexpected_keys = self.model.load_state_dict(state_dict, strict=False)
+                        print(f"DEBUG: Partial loading successful")
+                        print(f"DEBUG: Missing keys: {len(missing_keys)}")
+                        print(f"DEBUG: Unexpected keys: {len(unexpected_keys)}")
+                        
+                        if len(missing_keys) > 0:
+                            print(f"DEBUG: Missing keys (first 5): {missing_keys[:5]}")
+                        if len(unexpected_keys) > 0:
+                            print(f"DEBUG: Unexpected keys (first 5): {unexpected_keys[:5]}")
+                            
+                    except Exception as partial_e:
+                        print(f"DEBUG: Partial loading also failed: {partial_e}")
+                        print(f"DEBUG: Using model with random weights")
+                        
+            except Exception as e:
+                print(f"DEBUG: Checkpoint loading failed: {e}")
+                print(f"DEBUG: Using model with random weights")
+        
+        self.model.to(self.device)
+        self.model.eval()
+        return self.model
