@@ -465,15 +465,22 @@ class EncoderDecoderMNISTClassifier(BaseModel):
         Returns:
             dict: Complete model configuration
         """
+        print(f"DEBUG: _extract_config_from_checkpoint called with checkpoint_path: {self.checkpoint_path}")
+        
         if not self.checkpoint_path:
             raise ValueError("Checkpoint path is required")
         
         # Extract grid size from filename
         match = re.search(r'mnist-encoder-decoder-(\d+)-varlen\.pt', self.checkpoint_path)
+        print(f"DEBUG: Regex match result: {match}")
+        
         if not match:
+            print(f"DEBUG: Could not extract grid size from checkpoint path: {self.checkpoint_path}")
             raise ValueError(f"Could not extract grid size from checkpoint path: {self.checkpoint_path}")
         
         grid_size = int(match.group(1))
+        print(f"DEBUG: Extracted grid_size: {grid_size}")
+        
         if not (1 <= grid_size <= 4):
             raise ValueError(f"Invalid grid size {grid_size} from checkpoint path")
         
@@ -483,10 +490,10 @@ class EncoderDecoderMNISTClassifier(BaseModel):
             'grid_size': grid_size,
             'image_size': grid_size * 28,  # e.g., 2*28=56 for 2x2 grid
             'max_seq_len': (grid_size * grid_size) + 2,  # +2 for start/finish tokens
-            'patch_size': 14,  # From training logs: --patch-size: 14
-            'encoder_embed_dim': 128,  # From training code: hardcoded value
-            'decoder_embed_dim': 128,  # From training code: hardcoded value
-            'num_layers': 8,  # From training code: hardcoded value
+            'patch_size': 7,  # From training code: default value
+            'encoder_embed_dim': 64,  # From training code: hardcoded value
+            'decoder_embed_dim': 64,  # From training code: hardcoded value
+            'num_layers': 4,  # From training code: hardcoded value
             'num_heads': 8,  # From training code: hardcoded value
             'dropout': 0.1,  # From training code: hardcoded value
             'normalize_mean': 0.1307,  # MNIST standard

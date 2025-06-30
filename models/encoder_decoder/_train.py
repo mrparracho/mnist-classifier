@@ -849,10 +849,10 @@ def main():
     model = EncoderDecoder(
         image_size=full_image_size,  # Full grid image size
         patch_size=args.patch_size,
-        encoder_embed_dim=128,
-        decoder_embed_dim=128,
-        num_layers=16,
-        num_heads=16,
+        encoder_embed_dim=64,
+        decoder_embed_dim=64,
+        num_layers=4,
+        num_heads=8,
         dropout=0.1,
         max_seq_len=max_seq_len  # Pass calculated max sequence length
     )

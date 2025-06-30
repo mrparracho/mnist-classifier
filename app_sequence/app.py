@@ -113,10 +113,30 @@ class Config:
     class canvas:
         width = 500
         height = 500
-        stroke_width = 25
+        # MNIST stroke width calculation:
+        # MNIST digits have ~2-3 pixel stroke width in 28x28 images
+        # Canvas scale factor: 500/28 ≈ 17.86
+        # Optimal stroke width: 2.5 * 17.86 ≈ 45 pixels
+        base_stroke_width = 45  # Matches MNIST training data characteristics
         stroke_color = "#FFFFFF"
         bg_color = "#000000"
         target_size = (28, 28)
+        
+        @staticmethod
+        def get_stroke_width(grid_size):
+            """Calculate stroke width proportionally based on grid size to match MNIST training data."""
+            # MNIST stroke width is ~2-3 pixels in 28x28 images
+            # For larger grids, reduce stroke width proportionally to maintain MNIST-like characteristics
+            if grid_size == 1:
+                return Config.canvas.base_stroke_width  # 45px for 1x1 grid
+            elif grid_size == 2:
+                return int(Config.canvas.base_stroke_width * 0.6)  # ~27px for 2x2 grid
+            elif grid_size == 3:
+                return int(Config.canvas.base_stroke_width * 0.4)  # ~18px for 3x3 grid
+            elif grid_size == 4:
+                return int(Config.canvas.base_stroke_width * 0.3)  # ~14px for 4x4 grid
+            else:
+                return max(8, int(Config.canvas.base_stroke_width / grid_size))  # Fallback
 
 config = Config()
 
@@ -161,6 +181,33 @@ with st.sidebar:
     st.markdown(f"**Current Grid:** {grid_size}x{grid_size}")
     st.markdown(f"**Expected Output:** {grid_size**2} digits")
     
+    # Show current pen width
+    current_stroke_width = config.canvas.get_stroke_width(grid_size)
+    st.markdown(f"**Pen Width:** {current_stroke_width}px")
+    
+    # Visual pen width indicator
+    st.markdown("**Pen Width Preview:**")
+    pen_preview_html = f"""
+    <div style="
+        background-color: #f0f0f0;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px;
+        margin: 5px 0;
+        text-align: center;
+    ">
+        <div style="
+            background-color: #000;
+            height: {current_stroke_width}px;
+            width: 100px;
+            margin: 0 auto;
+            border-radius: {current_stroke_width//2}px;
+        "></div>
+        <small>Stroke width: {current_stroke_width}px</small>
+    </div>
+    """
+    st.markdown(pen_preview_html, unsafe_allow_html=True)
+    
     # Model information
     st.title("Model Information")
     st.markdown("""
@@ -185,14 +232,14 @@ with col1:
     
     # Instructions based on grid size
     if grid_size == 1:
-        st.info("Draw a single digit in the canvas below.")
+        st.info("Draw a single digit in the canvas below. Pen width is optimized for single digit drawing.")
     else:
-        st.info(f"Draw a single digit in any of the {grid_size}x{grid_size} grid cells below.")
+        st.info(f"Draw a single digit in any of the {grid_size}x{grid_size} grid cells below. Pen width automatically adjusts for optimal drawing in smaller cells.")
     
     # Create canvas for drawing with grid background
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.0)",
-        stroke_width=config.canvas.stroke_width,
+        stroke_width=config.canvas.get_stroke_width(grid_size),
         stroke_color=config.canvas.stroke_color,
         background_image=grid_bg,
         width=config.canvas.width,

@@ -31,10 +31,21 @@ class Config:
     class canvas:
         width = 280
         height = 280
-        stroke_width = 20
+        # MNIST stroke width calculation:
+        # MNIST digits have ~2-3 pixel stroke width in 28x28 images
+        # Canvas scale factor: 280/28 = 10
+        # Optimal stroke width: 2.5 * 10 = 25 pixels
+        base_stroke_width = 25  # Matches MNIST training data characteristics
         stroke_color = "#FFFFFF"
         bg_color = "#000000"
         target_size = (28, 28)
+        
+        @staticmethod
+        def get_stroke_width(grid_size=1):
+            """Calculate stroke width to match MNIST training data characteristics."""
+            # For the main app, we use a single digit, so return base width
+            # This matches the MNIST stroke width characteristics
+            return Config.canvas.base_stroke_width
 
 config = Config()
 
@@ -101,7 +112,7 @@ with col1:
     # Create canvas for drawing
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.0)",
-        stroke_width=config.canvas.stroke_width,
+        stroke_width=config.canvas.get_stroke_width(),
         stroke_color=config.canvas.stroke_color,
         background_color=config.canvas.bg_color,
         width=config.canvas.width,
