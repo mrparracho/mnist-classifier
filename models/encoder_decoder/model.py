@@ -8,7 +8,13 @@ import torchvision.transforms as transforms
 from typing import Optional, List
 import re
 
-from base.base_model import BaseModel
+# Handle imports for both training (from root) and container (from models directory) scenarios
+try:
+    # Try container imports first (when running from /app directory)
+    from base.base_model import BaseModel
+except ImportError:
+    # Fall back to training imports (when running from root directory)
+    from models.base.base_model import BaseModel
 
 
 class PatchEmbedding(nn.Module):

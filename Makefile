@@ -1,4 +1,4 @@
-.PHONY: dev train test deploy clean setup fix-docker docker-diagnose
+.PHONY: dev train train-cnn train-transformer1 train-transformer2 train-encoder-decoder test deploy clean setup fix-docker docker-diagnose
 
 setup:
 	chmod +x scripts/setup_venvs.sh
@@ -15,9 +15,28 @@ docker-diagnose:
 dev:
 	docker-compose -f infrastructure/docker-compose.dev.yml up --build
 
-train:
-	source .venv/model/bin/activate && \
-	python model/training/train.py
+# Train specific models - using simple approach
+train: train-cnn
+
+train-cnn:
+	@echo "Training CNN model..."
+	python -m models.cnn_mnist.train
+
+train-transformer1:
+	@echo "Training Transformer1 model..."
+	python -m models.transformer1_mnist.train
+
+train-transformer2:
+	@echo "Training Transformer2 model..."
+	python -m models.transformer2_mnist.train
+
+train-encoder-decoder:
+	@echo "Training Encoder-Decoder model..."
+	python -m models.encoder_decoder.train
+
+# Train all models
+train-all: train-cnn train-transformer1 train-transformer2 train-encoder-decoder
+	@echo "All models trained successfully!"
 
 test:
 	source .venv/model/bin/activate && \

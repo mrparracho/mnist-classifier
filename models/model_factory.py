@@ -4,12 +4,24 @@ Model factory for managing multiple MNIST model implementations.
 
 import os
 from typing import Dict, List, Optional, Type
-from base.base_model import BaseModel
-from cnn_mnist.model import CNNMNISTClassifier
-from transformer1_mnist.model import Transformer1MNISTClassifier
-from transformer2_mnist.model import Transformer2MNISTClassifier
-from encoder_decoder.model import EncoderDecoderMNISTClassifier
-from config import get_model_config
+
+# Handle imports for both training (from root) and container (from models directory) scenarios
+try:
+    # Try container imports first (when running from /app directory)
+    from base.base_model import BaseModel
+    from cnn_mnist.model import CNNMNISTClassifier
+    from transformer1_mnist.model import Transformer1MNISTClassifier
+    from transformer2_mnist.model import Transformer2MNISTClassifier
+    from encoder_decoder.model import EncoderDecoderMNISTClassifier
+    from config import get_model_config
+except ImportError:
+    # Fall back to training imports (when running from root directory)
+    from models.base.base_model import BaseModel
+    from models.cnn_mnist.model import CNNMNISTClassifier
+    from models.transformer1_mnist.model import Transformer1MNISTClassifier
+    from models.transformer2_mnist.model import Transformer2MNISTClassifier
+    from models.encoder_decoder.model import EncoderDecoderMNISTClassifier
+    from models.config import get_model_config
 
 
 class ModelFactory:
@@ -149,7 +161,10 @@ class ModelFactory:
             raise ValueError("Encoder-decoder model not registered")
         
         # Get grid-specific checkpoint path
-        from config import ModelRegistry
+        try:
+            from config import ModelRegistry
+        except ImportError:
+            from models.config import ModelRegistry
         checkpoint_path = ModelRegistry.get_encoder_decoder_checkpoint_path(grid_size)
         
         # Create model instance with specific checkpoint

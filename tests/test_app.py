@@ -13,7 +13,7 @@ def test_drawing_canvas_initialization():
     canvas = DrawingCanvas()
     assert canvas.canvas_width == 280
     assert canvas.canvas_height == 280
-    assert canvas.stroke_width == 20
+    assert canvas.base_stroke_width == 25
     assert canvas.stroke_color == "#FFFFFF"
     assert canvas.bg_color == "#000000"
 
