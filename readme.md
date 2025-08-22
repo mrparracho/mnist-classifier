@@ -147,20 +147,16 @@ Each model can be trained independently:
 
 ```bash
 # Train CNN model
-cd models/cnn_mnist
-python train.py
+make train-cnn
 
 # Train Transformer1 model
-cd models/transformer1_mnist
-python train.py
+make train-transformer1
 
 # Train Transformer2 model
-cd models/transformer2_mnist
-python train.py
+make train-transformer2
 
 # Train Encoder-Decoder model
-cd models/encoder_decoder
-python train.py
+make train-enconder-decoder
 ```
 
 ## Configuration
