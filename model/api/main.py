@@ -99,11 +99,16 @@ def load_model():
     try:
         model = get_model()
         
-        # Load the trained weights
-        model.load_state_dict(torch.load(
-            MODEL_PATH, 
-            map_location=torch.device('cpu')
-        ))
+        # Load the checkpoint or model weights
+        checkpoint = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
+        
+        # Check if it's a checkpoint (contains 'model_state_dict') or just model weights
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            # It's a checkpoint, load just the model weights
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            # It's just model weights
+            model.load_state_dict(checkpoint)
         
         # Set model to evaluation mode
         model.eval()

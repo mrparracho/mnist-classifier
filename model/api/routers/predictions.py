@@ -28,7 +28,18 @@ logger = logging.getLogger(__name__)
 def get_model():
     model = MNISTModel()
     model_path = os.getenv('MODEL_PATH', '/app/checkpoints/mnist_model.pt')
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    
+    # Load the checkpoint or model weights
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    
+    # Check if it's a checkpoint (contains 'model_state_dict') or just model weights
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        # It's a checkpoint, load just the model weights
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        # It's just model weights
+        model.load_state_dict(checkpoint)
+    
     model.eval()
     return model
 
