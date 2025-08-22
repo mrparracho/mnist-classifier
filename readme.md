@@ -1,4 +1,4 @@
-# Digit Sequence Classifier App
+# Multi-Digit Sequence Classifier App
 
 ![MNIST Example](https://img.shields.io/badge/MNIST-Multi%20Model%20Classifier-blue)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
