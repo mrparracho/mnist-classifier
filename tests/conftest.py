@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 import torch
-from model.training.model import MNISTModel
+from models import get_model
 from datetime import datetime
 from unittest.mock import patch
 
@@ -15,16 +15,32 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 # Create a test model path
 TEST_MODEL_PATH = os.path.join(os.path.dirname(__file__), "test_model.pt")
 
+class MockModel:
+    """Mock model for testing."""
+    def __init__(self):
+        self.device = torch.device('cpu')
+    
+    def __call__(self, x):
+        # Return random logits for testing
+        return torch.randn(x.shape[0], 10)
+    
+    def eval(self):
+        return self
+    
+    def to(self, device):
+        self.device = device
+        return self
+
 @pytest.fixture(scope="session")
 def mock_model():
     """Create a dummy model for testing."""
-    return MNISTModel()
+    return MockModel()
 
 @pytest.fixture(scope="session")
 def app(mock_model):
     """Create a FastAPI app with mocked model loading."""
-    with patch('model.api.main.load_model', return_value=mock_model):
-        from model.api.main import app
+    with patch('models.api.main.load_model', return_value=mock_model):
+        from models.api.main import app
         return app
 
 @pytest.fixture(scope="session")
@@ -50,20 +66,10 @@ def test_db(test_db_engine):
         db.close()
 
 @pytest.fixture(scope="function")
-def client(app, test_db):
-    """Create a test client with a test database."""
-    from model.api.database import get_db
-    
-    def override_get_db():
-        try:
-            yield test_db
-        finally:
-            test_db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
+def client(app):
+    """Create a test client."""
     with TestClient(app) as test_client:
         yield test_client
-    app.dependency_overrides.clear()
 
 @pytest.fixture(scope="session")
 def test_image():
@@ -75,7 +81,7 @@ def test_image():
 def test_prediction():
     """Create a test prediction result."""
     return {
-        "digit": 5,
+        "predicted_digit": 5,
         "confidence": 0.95,
         "timestamp": "2024-01-01T00:00:00Z"
     }
@@ -83,42 +89,44 @@ def test_prediction():
 @pytest.fixture(scope="function")
 def test_prediction_record(test_db):
     """Create a test prediction record in the database."""
-    from model.api.models import Prediction
+    from models.api.models import Prediction
     prediction = Prediction(
-        digit=5,
+        id="test-prediction-id",
+        timestamp=datetime.utcnow(),
+        image_data=b"test_image_data",
+        prediction=5,
         confidence=0.95,
-        timestamp=datetime.utcnow()
+        model_name="cnn_mnist"
     )
-    test_db.add(prediction)
-    test_db.commit()
-    test_db.refresh(prediction)
+    # Note: Since we're using Pydantic models, we don't actually add to DB
+    # This is just for testing the model structure
     return prediction
 
 @pytest.fixture(scope="function")
 def test_feedback_record(test_db, test_prediction_record):
     """Create a test feedback record in the database."""
-    from model.api.models import Feedback
-    feedback = Feedback(
+    from models.api.models import FeedbackRequest
+    feedback = FeedbackRequest(
         prediction_id=test_prediction_record.id,
-        is_correct=True,
-        correct_digit=5
+        actual_digit=5,
+        model_name="cnn_mnist"
     )
-    test_db.add(feedback)
-    test_db.commit()
-    test_db.refresh(feedback)
     return feedback
 
 @pytest.fixture(scope="function")
 def test_database_with_data(test_db, test_prediction_record, test_feedback_record):
     """Create a test database with sample data."""
-    # Add more predictions
-    from model.api.models import Prediction
+    # Create multiple test predictions
+    from models.api.models import Prediction
+    predictions = []
     for i in range(5):
         prediction = Prediction(
-            digit=i,
+            id=f"test-prediction-{i}",
+            timestamp=datetime.utcnow(),
+            image_data=b"test_image_data",
+            prediction=i,
             confidence=0.9,
-            timestamp=datetime.utcnow()
+            model_name="cnn_mnist"
         )
-        test_db.add(prediction)
-    test_db.commit()
-    return test_db 
+        predictions.append(prediction)
+    return predictions 
