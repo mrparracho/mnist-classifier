@@ -1,4 +1,4 @@
-# MNIST Multi-Model Classifier
+# Digit Sequence Classifier App
 
 ![MNIST Example](https://img.shields.io/badge/MNIST-Multi%20Model%20Classifier-blue)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
@@ -8,24 +8,29 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue)
 
-A comprehensive web application for recognizing handwritten digits using multiple PyTorch neural network architectures trained on the MNIST dataset.
+A comprehensive web application for recognizing handwritten digits using multiple PyTorch neural network architectures (CNN and Transformers) trained on the MNIST dataset.
 
-**[Live Demo](https://195.201.26.250)**
+
+**[Live Demo (possibly switched off)](https://195.201.26.250)**
 
 ## Features
 
-### Main Application (Port 8501)
+### ViT Sequence Classification Application (Port 8502)
+- Sequence prediction using a ViT encoder-decoder model
+- Grid size selection (1x1 to 4x4)
+- Visual grid display of predicted sequences
+- Sequence feedback system
+
+![ViT Sequence](sequence_classification.png)
+
+### Single Digit Classification Application (Port 8501)
 - Interactive digit drawing interface
-- Multi-model selection (CNN, Transformer1, Transformer2)
+- Multi-model comparison (CNN, Transformer1, Transformer2)
 - Real-time digit recognition
 - Model performance comparison
 - User feedback collection
 
-### Sequence Application (Port 8502)
-- Sequence prediction using encoder-decoder model
-- Grid size selection (1x1 to 4x4)
-- Visual grid display of predicted sequences
-- Sequence feedback system
+![Single Digit Clasification](single_digit_classification.png)
 
 ## Quick Start
 
